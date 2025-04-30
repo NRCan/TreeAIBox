@@ -91,6 +91,10 @@ Function .onInit
     ; Try to find CloudCompare installation
     FindCloudCompare:
     ; Check common installation paths
+
+    IfFileExists "C:\Program Files\CloudCompare\CloudCompare.exe" 0 +2
+    StrCpy $CCPath "C:\Program Files\CloudCompare"
+
     IfFileExists "$PROGRAMFILES\CloudCompare\CloudCompare.exe" 0 +2
     StrCpy $CCPath "$PROGRAMFILES\CloudCompare"
     
