@@ -1589,18 +1589,10 @@ class TreeAIBoxWeb(QMainWindow):
                     worker.terminate()
                     worker.wait(3000)  # Wait up to 3 seconds
             self.web_interface.workers.clear()
-        
-        # Clear the global reference
-        app = QApplication.instance()
-        if app is not None:
-        #     print("Forcing application exit...")
-            app.quit()
-            QApplication.exit()
 
         # Accept the close event
-        #event.accept()
-        #super().closeEvent(event)
-
+        # event.accept()
+        # super().closeEvent(event)
 
     def loadHtmlContent(self):
         """Load the HTML UI"""
@@ -1632,14 +1624,14 @@ class TreeAIBoxWeb(QMainWindow):
             self.web_view.setHtml(html_content)
 
 
-
 if __name__ == "__main__":
     # Get existing QApplication instance or create new one if none exists
     app = QApplication.instance()
     if app is None:
         app = QApplication(sys.argv)
-        
-    window = TreeAIBoxWeb()
-    window.show()
-    sys.exit(app.exec())
-
+        window = TreeAIBoxWeb()
+        window.show()
+        sys.exit(app.exec())
+    else:
+        window = TreeAIBoxWeb()
+        window.show()
