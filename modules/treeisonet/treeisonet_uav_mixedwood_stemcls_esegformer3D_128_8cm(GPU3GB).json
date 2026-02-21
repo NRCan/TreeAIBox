@@ -2,6 +2,7 @@
   "title": "treeloc",
   "model": {
     "type": "SegFormer",
+    "num_classes": 2,
     "voxel_number_in_block": [128,128,128],
     "voxel_resolution_in_meter": [0.08,0.08,0.3],
     "patch_size": 3,

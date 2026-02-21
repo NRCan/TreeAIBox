@@ -1,0 +1,4 @@
+python multi_height_circle_fitting.py --input "d:\TreeAIBox\data\stand_0.00000000000_init_segs_filtered_itc_26p0_treefilter_no_ground_treefilter_filtered_stemcls_2p0.las" --max_height 1.8 --step 0.1 --thickness 0.1 --average_radius
+python branch_split_detection.py --input ..\data\stand_0.00000000000_init_segs_filtered_itc_26p0_treefilter_no_ground_treefilter_filtered_stemcls_2p0.las --max-height 8.0 --step .1 --visualize --no-offset
+python component_extraction_connectivity.py --input "../data/stand_0.00000000000_init_segs_filtered_itc_26p0_treefilter_no_ground_treefilter_filtered_stemcls_2p0.las" --branching-height 2.0 --visualize --viz-mode sequence
+cd scripts && conda activate component_extraction && python component_extraction_connectivity.py --input "../data/stand_0.00000000000_init_segs_filtered_itc_26p0_treefilter_no_ground_treefilter_filtered_stemcls_2p0.las" --branching-height 2.0 --visualize --viz-mode components_circles 

@@ -1,11 +1,17 @@
 import numpy as np
 import numpy_indexed as npi
+import warnings
+import sys
+import time
 
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
 from scipy.sparse.csgraph import dijkstra
 from sklearn.mixture import BayesianGaussianMixture
+
+# Suppress convergence warnings - they are non-fatal and expected in this context
+warnings.filterwarnings('ignore', category=UserWarning, module='sklearn.mixture')
 
 def create_sparse_graph(points, k=10, max_distance=np.inf):
     """
@@ -92,35 +98,45 @@ def cluster_graph(graph,node_total,target_idx):
     return label_pred,len(nearest_targets_u)
 
 def shortestpath3D(points,stemcls,base_loc,min_res=0.06, max_isolated_distance = 0.3, progress_callback=lambda x: None):
+    print(f"[stemCluster] Starting stem clustering...")
+    print(f"[stemCluster] Input points: {len(points)}, Min resolution: {min_res}, Max isolated distance: {max_isolated_distance}")
+    start_time = time.time()
 
     if stemcls is None:
         pcd = points
         stem_idx=None
+        print(f"[stemCluster] Using all points as stem points: {len(pcd)}")
     else:
         stem_idx = np.where(stemcls>1)[0]
         if len(stem_idx) == 0:
-            print("There are no stem points")
+            print("[stemCluster] ERROR: There are no stem points")
             return
         pcd = points[stem_idx]
+        print(f"[stemCluster] Extracted {len(pcd)} stem points from input (stemcls > 1)")
 
 
+    print(f"[stemCluster] Decimating point cloud with resolution {min_res}m...")
     dec_idx_uidx, dec_inverse_idx = decimate_pcd(pcd[:, :3], min_res)  # reduce point number first to avoid computation overhead
     pcd_dec = pcd[dec_idx_uidx]
+    print(f"[stemCluster] Decimated: {len(pcd)} points -> {len(pcd_dec)} points")
+    
     pcd_dec_min=np.min(pcd_dec[:,:3],axis=0)
     pcd_dec[:,:3]=pcd_dec[:,:3]-pcd_dec_min
 
     pcd_base_loc=base_loc.copy()
     pcd_base_loc[:, :3]=base_loc[:,:3]-pcd_dec_min
+    print(f"[stemCluster] Tree base locations: {len(pcd_base_loc)}")
 
     progress_callback(15)
 
-    #create connectivity graph and separate into connected components
+    print(f"[stemCluster] Creating connectivity graph...")
     graph = create_sparse_graph(pcd_dec[:, :3], k=min(len(pcd_dec),10), max_distance=min_res * 3)
     n_comps, conn_labels = connected_components(graph, directed=False, return_labels=True)
+    print(f"[stemCluster] Found {n_comps} connected components")
 
     progress_callback(30)
 
-    #find the points nearest to the base locations as the base points
+    print(f"[stemCluster] Finding nearest base points...")
     kdtree = cKDTree(pcd_dec[:,:3])
     distances, indices = kdtree.query(pcd_base_loc[:,:3])
     conn_base_idx=conn_labels[indices] #get the component ID of base points as the base IDs
@@ -136,44 +152,95 @@ def shortestpath3D(points,stemcls,base_loc,min_res=0.06, max_isolated_distance =
     to_split_idx=np.where(base_per_conn_counts>1)[0]
     conn_idxs_to_split=conn_base_idx_unq[to_split_idx]
     base_per_conn_counts=base_per_conn_counts[to_split_idx].astype(np.int32)
+    print(f"[stemCluster] Components needing splitting: {len(conn_idxs_to_split)} (with >1 base point)")
 
     conn_labels_split=conn_labels
     max_counter=n_comps
+    print(f"[stemCluster] Splitting components with BayesianGaussianMixture...")
+    clustering_start = time.time()
+    
     for i,conn_idx_to_split in enumerate(conn_idxs_to_split):
+        if (i+1) % max(1, len(conn_idxs_to_split)//10) == 0:
+            elapsed = time.time() - clustering_start
+            rate = (i+1) / elapsed if elapsed > 0 else 0
+            print(f"[stemCluster] Clustering progress: {i+1}/{len(conn_idxs_to_split)} ({100*(i+1)//len(conn_idxs_to_split)}%) - {rate:.1f} components/sec")
+            sys.stdout.flush()
+        
         comp_pts=pcd_dec[comp_idx_groups[conn_idx_to_split],:3]
-        bgm = BayesianGaussianMixture(n_components=base_per_conn_counts[i], init_params="k-means++",random_state=42).fit(comp_pts)
-        labels = bgm.predict(comp_pts)
-        conn_labels_split[comp_idx_groups[conn_idx_to_split]]=labels+max_counter
-        max_counter+=base_per_conn_counts[i]
+        
+        # Validation: Check if we have enough samples for BayesianGaussianMixture
+        if len(comp_pts) < 2:
+            # Skip splitting if only 1 point - keep original label
+            continue
+        
+        # Ensure n_components doesn't exceed number of samples
+        n_components = min(base_per_conn_counts[i], len(comp_pts))
+        
+        try:
+            bgm = BayesianGaussianMixture(
+                n_components=n_components,
+                init_params="k-means++",
+                max_iter=200,           # Increased from default 100
+                n_init=10,              # More initialization attempts
+                random_state=42,
+                tol=1e-3,               # Relaxed tolerance
+                verbose=0               # Suppress verbose output
+            ).fit(comp_pts)
+            labels = bgm.predict(comp_pts)
+            conn_labels_split[comp_idx_groups[conn_idx_to_split]]=labels+max_counter
+            max_counter+=n_components
+        except Exception as e:
+            # If clustering fails for any reason, keep original labels
+            print(f"[stemCluster] Warning: Clustering failed for component {conn_idx_to_split}: {e}")
+            max_counter+=n_components
+            continue
+    
+    clustering_time = time.time() - clustering_start
+    print(f"[stemCluster] Clustering completed in {clustering_time:.2f}s ({len(conn_idxs_to_split)/clustering_time:.1f} components/sec)")
 
+    print(f"[stemCluster] Re-ordering component labels...")
     _, conn_labels, comp_size = np.unique(conn_labels_split, return_inverse=True, return_counts=True)#re-order the component labels from 0-N
     conn_base_idx=conn_labels[indices] #update base IDs with new component IDs of base points
 
     n_comps=len(comp_size)
+    print(f"[stemCluster] Total components after splitting: {n_comps}")
     #return_inverse of the np.unique function is my favorite way to restore the connected component ids (unique values of conn_labels)
     # to the original order of conn_labels (or equivalently original order of points in pcd_dec);
     _, comp_inverse_idx, comp_size = np.unique(conn_labels, return_inverse=True, return_counts=True)
 
     progress_callback(50)
 
+    print(f"[stemCluster] Creating component graph...")
     #created a connectivity graph with pairs of nearest K nodes, their minimal 3D point distance to be the edge weight.
     comp_graph, comp_total = create_node_graph(np.concatenate([pcd_dec[:,:3], conn_labels[:, np.newaxis]], axis=-1), k=10, max_distance=max_isolated_distance)
+    print(f"[stemCluster] Component graph created with {comp_total} nodes")
 
     progress_callback(70)
 
+    print(f"[stemCluster] Assigning stem nodes using shortest path...")
     # For each node, find its associated stem node ID with the shortest path among all other stem nodes, and then assign the base ID of this stem node to this node
     seg_pred, seg_total = cluster_graph(comp_graph, n_comps, conn_base_idx)
+    print(f"[stemCluster] Assigned {seg_total} distinct stem segments")
     # Map IDs from node to point based on the inverse indices
     # (1. from node to decimated point cloud, 2. from decimated to original point cloud)
+    print(f"[stemCluster] Mapping predictions back to original point cloud...")
     all_pred = seg_pred[comp_inverse_idx][dec_inverse_idx].astype(np.int32)
 
     pcd_pred_labels=np.zeros(len(points))
     if stemcls is None:
         pcd_pred_labels = all_pred
+        print(f"[stemCluster] Assigned labels to all {len(points)} points")
     else:
         # tree1=pcd[all_pred==0]
         # if np.sum(np.max(tree1[:,:2])-np.min(tree1[:,:2]))
         pcd_pred_labels[stem_idx]=all_pred+1
+        print(f"[stemCluster] Assigned labels to {len(stem_idx)} stem points (out of {len(points)} total)")
+
+    total_time = time.time() - start_time
+    n_unique_labels = len(np.unique(pcd_pred_labels)) - 1  # Exclude background (0)
+    print(f"[stemCluster] Stem clustering completed in {total_time:.2f}s")
+    print(f"[stemCluster] Final result: {n_unique_labels} unique stem clusters")
+    sys.stdout.flush()
 
     progress_callback(100)
     return pcd_pred_labels

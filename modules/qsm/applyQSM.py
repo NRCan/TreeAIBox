@@ -27,8 +27,23 @@ def saveTreeToXML(tree_list,attribute_list,filename):
     root = ET.Element("tree")
     branches = {}
     branch_id_counter = 1
+    
+    # Filter out branches with insufficient nodes
+    valid_branches = []
     for branch, attrs in zip(tree_list, attribute_list):
+        if len(branch) < 1 or len(attrs) < 1:
+            print(f"[QSM Warning] Skipping invalid branch in XML export")
+            continue
+        valid_branches.append((branch, attrs))
         branches[branch[0]] = (branch, attrs)
+    
+    if not valid_branches:
+        print(f"[QSM Warning] No valid branches to save to XML")
+        # Create empty tree XML
+        xml_str = minidom.parseString(ET.tostring(root)).toprettyxml(indent="  ")
+        with open(filename, "w", encoding="utf-8") as file:
+            file.write(xml_str)
+        return
 
     def create_branch(parent_node, nodes, attrs, level, prev_node_in_parent):
         nonlocal branch_id_counter
@@ -65,7 +80,9 @@ def saveTreeToXML(tree_list,attribute_list,filename):
             "radius": f"{attr[3]:.6f}"
         })
 
-    create_branch(-1, tree_list[0], attribute_list[0], 1, -1)
+    if valid_branches:
+        create_branch(-1, valid_branches[0][0], valid_branches[0][1], 1, -1)
+    
     xml_str = minidom.parseString(ET.tostring(root)).toprettyxml(indent="  ")
     with open(filename, "w", encoding="utf-8") as file:
         file.write(xml_str)
@@ -86,6 +103,11 @@ def saveTreeToObj(tree_centroid_radius,fname, interval_distance=0.05, num_sides=
     all_faces = []
     vertex_offset = 0
     for curve_nodes in tree_centroid_radius:
+        # Skip branches with insufficient nodes (need at least 2 for tube creation)
+        if len(curve_nodes) < 2:
+            print(f"[QSM Warning] Skipping branch with only {len(curve_nodes)} node(s)")
+            continue
+            
         if len(curve_nodes) <= 3:
             vertices, faces = createLineTube(curve_nodes, interval_distance, num_sides)
         else:
@@ -341,7 +363,7 @@ def branchSegmentation(branch_pts,K=5, reg_strength=1.0,resolution=0.0):
 def movingAverage(x, w):
     return np.convolve(x, np.ones(w), 'valid') / w
 
-def findStems(pts,segs_centroids,segs_centroids_stem_labels,nn_centroids_k=5,weight_min_dist=0.05):#pts[x,y,z,stemcls[stem:1],init_segs]
+def findStems(pts,segs_centroids,segs_centroids_stem_labels,nn_centroids_k=5,weight_min_dist=0.05,max_stem_gap=0.10):#pts[x,y,z,stemcls[stem:1],init_segs]
     stempts=pts[pts[:,-2]>0]
     stem_labels_idx=np.where(segs_centroids_stem_labels>0)[0]
     segs_centroids_stem=segs_centroids[stem_labels_idx]
@@ -349,7 +371,8 @@ def findStems(pts,segs_centroids,segs_centroids_stem_labels,nn_centroids_k=5,wei
     kdtree = cKDTree(segs_centroids_stem[:, :3])
     centroids_nn_distances, centroids_nn_indices = kdtree.query(segs_centroids_stem[:, :3], k=nn_centroids_k + 1)
     # choose to calculate the knn neighbors of each point, and their label difference could be used to update the connectivity matrix#future: could reduce the time by ignoring paris between stem pts
-    seg_id_pairs = getConnectivity(stempts, k=nn_centroids_k)  # mutually connected or not
+    print(f"[findStems] Using max_stem_gap={max_stem_gap}m to connect stem segments")
+    seg_id_pairs = getConnectivity(stempts, k=nn_centroids_k, max_distance=max_stem_gap)  # mutually connected or not
     seg_id_pairs_set = set(map(tuple, seg_id_pairs))
     seg_id_pairs_set.update(set(map(tuple, seg_id_pairs[:, ::-1])))  # Add reverse pairs
 
@@ -401,11 +424,47 @@ def initSegmentation(pts,K_stem=5,reg_strength_stem=1.0,K_branch=10,reg_strength
     return init_segs.astype(np.int32)
 
 def refineBranchHead(tree,segs_centroids,max_distance=0.3):
+    print(f"[refineBranchHead] Starting with {len(tree)} tree paths")
+    print(f"[refineBranchHead] segs_centroids shape: {segs_centroids.shape}")
+    
     branch_head_segment=np.array([path[:3] for path in tree if len(path)>2])
+    print(f"[refineBranchHead] branch_head_segment shape: {branch_head_segment.shape}")
+    
+    if len(branch_head_segment) == 0:
+        print(f"[refineBranchHead] No branches with >2 nodes, returning unchanged tree")
+        return tree
+    
     branch_path_idx=np.array([i for i,path in enumerate(tree) if len(path)>2])
-    branch_head_pts=segs_centroids[branch_head_segment[:,0]][:, :3]
-    branch_head_previous_pts=segs_centroids[branch_head_segment[:, 1]][:, :3]
-    branch_head_previous_previous_pts=segs_centroids[branch_head_segment[:, 2]][:, :3]
+    
+    # Extract indices and ensure we get 2D arrays
+    head_indices = branch_head_segment[:,0]
+    prev_indices = branch_head_segment[:, 1]
+    prev_prev_indices = branch_head_segment[:, 2]
+    
+    print(f"[refineBranchHead] head_indices shape: {head_indices.shape}, sample: {head_indices[:3]}")
+    
+    # Index into segs_centroids - this should always return 2D since segs_centroids is 2D
+    branch_head_pts = segs_centroids[head_indices]
+    print(f"[refineBranchHead] branch_head_pts shape: {branch_head_pts.shape}")
+    
+    # Ensure it's 2D (just in case we have a single branch)
+    if branch_head_pts.ndim == 1:
+        branch_head_pts = branch_head_pts.reshape(1, -1)
+        print(f"[refineBranchHead] Reshaped branch_head_pts to: {branch_head_pts.shape}")
+    
+    branch_head_previous_pts = segs_centroids[prev_indices]
+    if branch_head_previous_pts.ndim == 1:
+        branch_head_previous_pts = branch_head_previous_pts.reshape(1, -1)
+    
+    branch_head_previous_previous_pts = segs_centroids[prev_prev_indices]
+    if branch_head_previous_previous_pts.ndim == 1:
+        branch_head_previous_previous_pts = branch_head_previous_previous_pts.reshape(1, -1)
+    
+    # Now we can safely slice to :3 (though they should already be exactly 3 columns)
+    branch_head_pts = branch_head_pts[:, :3]
+    branch_head_previous_pts = branch_head_previous_pts[:, :3]
+    branch_head_previous_previous_pts = branch_head_previous_previous_pts[:, :3]
+    
     branch_head_previous_dir=branch_head_previous_previous_pts-branch_head_previous_pts
     branch_head_previous_dir=branch_head_previous_dir/np.linalg.norm(branch_head_previous_dir, axis=-1)[:, np.newaxis]
 
@@ -479,17 +538,41 @@ def calculateRadius(pts,tree,segs_centroids,min_r=0.04):# this needs to be impro
         segs_centroid_dir=segs_centroid_vec/np.linalg.norm(segs_centroid_vec, axis=-1)[:, np.newaxis]
         for i,node in enumerate(path[1:]):
             if len(segs_centroids_group[node]) > 4:
-                #project to the horizontal plane and circle fitting
-                segs_vec = pts[segs_centroids_group[node],:3]-segs_centroids[node,:3]
-                segs_prj = np.dot(segs_vec, segs_centroid_dir[i,:3])
-                segs_prj_2d=pts[segs_centroids_group[node],:2] - np.outer(segs_prj, segs_centroid_dir[i,:3])[:, :2]
-                r0=np.median(np.sqrt(np.sum(np.power(segs_prj_2d-np.mean(segs_prj_2d,0),2),axis=1)))
-                xc, yc, r, sigma = riemannSWFLa(segs_prj_2d)
-                if sigma/r>0.3:#only fit circles when the branches or stems are large enough
-                    path_centroid_radius.append(np.array([segs_centroids[node,0],segs_centroids[node,1],segs_centroids[node,2],r0]))
-                else:
-                    # path_centroid_radius.append(np.array([xc,yc,segs_centroids[node,2],np.minimum(r,r0*1.2)]))
-                    path_centroid_radius.append(np.array([segs_centroids[node,0],segs_centroids[node,1],segs_centroids[node,2],np.minimum(r,r0*1.2)]))
+                try:
+                    #project to the horizontal plane and circle fitting
+                    segs_vec = pts[segs_centroids_group[node],:3]-segs_centroids[node,:3]
+                    segs_prj = np.dot(segs_vec, segs_centroid_dir[i,:3])
+                    segs_prj_2d=pts[segs_centroids_group[node],:2] - np.outer(segs_prj, segs_centroid_dir[i,:3])[:, :2]
+                    
+                    # Check for NaN or inf values before circle fitting
+                    if not np.all(np.isfinite(segs_prj_2d)):
+                        # Fallback to min_r if projected data is invalid
+                        path_centroid_radius.append(np.array([segs_centroids[node,0],segs_centroids[node,1],segs_centroids[node,2],min_r]))
+                        continue
+                    
+                    r0=np.median(np.sqrt(np.sum(np.power(segs_prj_2d-np.mean(segs_prj_2d,0),2),axis=1)))
+                    
+                    # Validate r0 before circle fitting
+                    if not np.isfinite(r0) or r0 < 1e-6:
+                        # Points are too close together, use min_r
+                        path_centroid_radius.append(np.array([segs_centroids[node,0],segs_centroids[node,1],segs_centroids[node,2],min_r]))
+                        continue
+                    
+                    xc, yc, r, sigma = riemannSWFLa(segs_prj_2d)
+                    
+                    # Check if circle fitting produced valid results
+                    if not np.isfinite(r) or not np.isfinite(sigma) or r < 1e-6:
+                        # Circle fitting failed, use r0 as fallback
+                        path_centroid_radius.append(np.array([segs_centroids[node,0],segs_centroids[node,1],segs_centroids[node,2],r0]))
+                    elif sigma/r>0.3:#only fit circles when the branches or stems are large enough
+                        path_centroid_radius.append(np.array([segs_centroids[node,0],segs_centroids[node,1],segs_centroids[node,2],r0]))
+                    else:
+                        # path_centroid_radius.append(np.array([xc,yc,segs_centroids[node,2],np.minimum(r,r0*1.2)]))
+                        path_centroid_radius.append(np.array([segs_centroids[node,0],segs_centroids[node,1],segs_centroids[node,2],np.minimum(r,r0*1.2)]))
+                except Exception as e:
+                    # Any error in circle fitting, use min_r as safe fallback
+                    print(f"[QSM Warning] Circle fitting failed for node {node}: {e}, using min_r={min_r}")
+                    path_centroid_radius.append(np.array([segs_centroids[node,0],segs_centroids[node,1],segs_centroids[node,2],min_r]))
             else:
                 path_centroid_radius.append(np.array([segs_centroids[node,0],segs_centroids[node,1],segs_centroids[node,2],min_r]))
 
@@ -500,38 +583,91 @@ def calculateRadius(pts,tree,segs_centroids,min_r=0.04):# this needs to be impro
             for i, filtered_radius in enumerate(filtered_radii):
                 path_centroid_radius[i][3] = filtered_radius
 
-        path_centroid_radius.insert(0,np.array([segs_centroids[path[0],0],segs_centroids[path[0],1],segs_centroids[path[0],2],path_centroid_radius[0][-1]]))
+        # Add the first node with appropriate radius
+        if len(path_centroid_radius) > 0:
+            # Use the radius from the first calculated node
+            first_node_radius = path_centroid_radius[0][-1]
+        else:
+            # Path has only 1 node or all nodes failed to calculate radius, use min_r
+            print(f"[QSM Warning] Path with {len(path)} nodes has no calculated radii, using min_r={min_r}")
+            first_node_radius = min_r
+        
+        path_centroid_radius.insert(0,np.array([segs_centroids[path[0],0],segs_centroids[path[0],1],segs_centroids[path[0],2],first_node_radius]))
         tree_centroid_radius.append(path_centroid_radius)
     return tree_centroid_radius
 
 def applyQSM(pts,k_neighbors=6,max_graph_distance=40, max_connectivity_search_distance=0.03, occlusion_distance_cutoff=0.4,smooth_ma_k=3,progress_callback=lambda x: None,wd=None):#pts[x,y,z,stemcls[stem:1],init_segs]
     progress_callback(0)
 
+    print(f"[applyQSM] Input pts shape: {pts.shape}")
+    print(f"[applyQSM] pts columns: x, y, z, stemcls, init_segs")
+    print(f"[applyQSM] Unique init_segs values: {np.unique(pts[:, -1].astype(np.int32))[:10]}... (showing first 10)")
 
-    segs_centroids = npg.aggregate(pts[:, -1].astype(np.int32), pts[:, :3], axis=0, func=np.mean)#pts[-1] is init_segs
-    segs_centroids_counts = npg.aggregate(pts[:, -1].astype(np.int32), 1)#pts[-1] is init_segs
-    segs_centroids_stem_labels = npg.aggregate(pts[:, -1].astype(np.int32), pts[:, -2], axis=0, func=np.max)#pts[-1] is init_segs
-    _, segs_centroids_inverse_idx = np.unique(pts[:, -1].astype(np.int32), return_inverse=True)
+    # Fixed: Need to aggregate each coordinate separately or use axis parameter
+    group_idx = pts[:, -1].astype(np.int32)
+    
+    # Aggregate x, y, z coordinates separately then stack
+    x_centroids = npg.aggregate(group_idx, pts[:, 0], func='mean')
+    y_centroids = npg.aggregate(group_idx, pts[:, 1], func='mean')
+    z_centroids = npg.aggregate(group_idx, pts[:, 2], func='mean')
+    segs_centroids = np.column_stack([x_centroids, y_centroids, z_centroids])
+    
+    print(f"[applyQSM] segs_centroids shape after aggregate: {segs_centroids.shape}")
+    print(f"[applyQSM] segs_centroids dtype: {segs_centroids.dtype}")
+    print(f"[applyQSM] First 3 centroids:\n{segs_centroids[:3]}")
+    
+    segs_centroids_counts = npg.aggregate(group_idx, 1, func='sum')#count points per segment
+    segs_centroids_stem_labels = npg.aggregate(group_idx, pts[:, -2], func='max')#pts[-2] is stemcls
+    _, segs_centroids_inverse_idx = np.unique(group_idx, return_inverse=True)
 
     # find stems by the longest among the shortest pathes to the bottom point
-    stems_idx,segs_centroids_stem_labels=findStems(pts,segs_centroids,segs_centroids_stem_labels)
+    print(f"[applyQSM] Finding stems...")
+    print(f"[applyQSM] segs_centroids_stem_labels unique values: {np.unique(segs_centroids_stem_labels)}")
+    print(f"[applyQSM] Number of segments with stem labels > 0: {np.sum(segs_centroids_stem_labels > 0)}")
+    
+    # Use 3x the connectivity distance for stem gaps to handle larger gaps at tree base
+    max_stem_gap = max_connectivity_search_distance * 3.0
+    stems_idx,segs_centroids_stem_labels=findStems(pts,segs_centroids,segs_centroids_stem_labels,max_stem_gap=max_stem_gap)
+    
+    print(f"[applyQSM] Found {len(stems_idx)} stem segments")
+    print(f"[applyQSM] Stem indices: {stems_idx[:10] if len(stems_idx) > 10 else stems_idx}... (showing first 10)")
+    
+    print(f"[applyQSM] Building connectivity graph...")
     graph, rows0, cols0, distances0, seg_id_pairs_set = getPointwiseClusterDistance(pts, segs_centroids, segs_centroids_stem_labels, max_connectivity_search_k=k_neighbors, max_connectivity_search_distance=max_connectivity_search_distance, occlusion_distance_cutoff=occlusion_distance_cutoff*0.5,nn_centroids_k=k_neighbors)
+    
+    print(f"[applyQSM] Graph edges: {len(rows0)}")
+    print(f"[applyQSM] Graph shape: {graph.shape}")
+    print(f"[applyQSM] Graph non-zero elements: {graph.nnz}")
 
     progress_callback(40)
 
 
     n_segs_centroids=len(segs_centroids)
+    print(f"[applyQSM] Creating tree paths from {len(stems_idx)} stem segments...")
     tree,segs_labels,n_segs=recreateTreePath(stems_idx, graph, n_segs_centroids,max_graph_distance)
+    
+    print(f"[applyQSM] First tree creation: {len(tree)} paths")
+    print(f"[applyQSM] Number of labeled segments: {np.sum(segs_labels > 0)}/{len(segs_labels)}")
+    print(f"[applyQSM] Tree path lengths: {[len(path) for path in tree[:5]]}... (first 5)")
 
     progress_callback(60)
 
 
     stem_new_ind=segs_labels>0
     stem_new_idx=np.where(stem_new_ind)[0]
+    
+    print(f"[applyQSM] Updating graph for less connected branches...")
+    print(f"[applyQSM] Segments connected so far: {len(stem_new_idx)}")
 
     # repeat the shortest path algorithm to the "less connected" branches
     graph=updatePointwiseClusterDistance(rows0, cols0, distances0, seg_id_pairs_set, stem_new_ind, occlusion_distance_cutoff=occlusion_distance_cutoff,weight_min_dist=0.03)
+    print(f"[applyQSM] Updated graph non-zero elements: {graph.nnz}")
+    
     tree, segs_labels,n_segs = recreateTreePath(stem_new_idx, graph,n_segs_centroids, max_graph_distance,tree,init_seg_id=n_segs+1,segs_labels=segs_labels)
+    
+    print(f"[applyQSM] After second iteration: {len(tree)} paths")
+    print(f"[applyQSM] Number of labeled segments: {np.sum(segs_labels > 0)}/{len(segs_labels)}")
+    print(f"[applyQSM] Tree path lengths: {[len(path) for path in tree[:5]]}... (first 5)")
 
     progress_callback(70)
 

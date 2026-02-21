@@ -1,6 +1,7 @@
 import sys
 import os
 import json
+import traceback
 import requests
 from pathlib import Path
 import numpy as np
@@ -23,9 +24,14 @@ try:
 
     CC = pycc.GetInstance()
     PYCC_AVAILABLE = True
-except ImportError:
+    print("✓ CloudCompare API loaded successfully")
+except ImportError as e:
     PYCC_AVAILABLE = False
-    print("Warning: PyCC not available. Some functionality will be limited.")
+    print(f"Warning: PyCC not available. Some functionality will be limited.")
+    print(f"Import error details: {e}")
+except Exception as e:
+    PYCC_AVAILABLE = False
+    print(f"Warning: PyCC failed to initialize: {e}")
 
 
 # Add this helper class to process events during long operations
@@ -36,7 +42,8 @@ class ProcessEvents:
 
     def __call__(self, progress):
         # Process events periodically to keep UI responsive
-        current_time = QApplication.instance().startTimer(0)
+        import time
+        current_time = time.time() * 1000  # Convert to milliseconds
         if current_time - self.last_time > self.msec:
             QApplication.instance().processEvents()
             self.last_time = current_time
@@ -126,6 +133,9 @@ class WebInterface(QObject):
 
         # Keep track of worker threads
         self.workers = []
+        
+        # Cache for standalone point cloud to persist across processing steps
+        self.standalone_point_cloud = None
 
     def cleanup(self):
         """Clean up resources"""
@@ -163,12 +173,400 @@ class WebInterface(QObject):
 
     def checkSelection(self):
         if not PYCC_AVAILABLE:
-            self.showNotification.emit("CloudCompare API not available", "error")
-            return False
+            # In standalone mode, we'll use file input instead of CloudCompare selection
+            if not hasattr(self, 'standalone_file_path') or not self.standalone_file_path:
+                self.showNotification.emit("Please select a point cloud file using the '📁 Select Point Cloud' button", "warning")
+                return False
+            return True
         if not CC.haveSelection():
             self.showNotification.emit("Please select at least one point cloud to proceed", "warning")
             return False
         return True
+
+    def loadStandalonePointCloud(self):
+        """Load point cloud from standalone file path, reading scalar fields from LAS extra dimensions"""
+        if not hasattr(self, 'standalone_file_path') or not self.standalone_file_path:
+            return None
+        
+        # Don't use cache - always reload from file to get latest scalar fields
+        file_ext = os.path.splitext(self.standalone_file_path)[1].lower()
+        
+        try:
+            scalar_fields_to_load = {}
+            
+            if file_ext in ['.txt', '.xyz', '.pts']:
+                # Load ASCII point cloud
+                pcd = np.loadtxt(self.standalone_file_path)
+            elif file_ext == '.npy':
+                # Load numpy binary
+                pcd = np.load(self.standalone_file_path)
+            elif file_ext in ['.las', '.laz']:
+                # Load LAS/LAZ file with scalar fields
+                try:
+                    import laspy
+                    las = laspy.read(self.standalone_file_path)
+                    pcd = np.vstack([las.x, las.y, las.z]).T
+                    
+                    # Load RGB channels if available
+                    if hasattr(las, 'red') and hasattr(las, 'green') and hasattr(las, 'blue'):
+                        scalar_fields_to_load['red'] = np.array(las.red)
+                        scalar_fields_to_load['green'] = np.array(las.green)
+                        scalar_fields_to_load['blue'] = np.array(las.blue)
+                        print(f"Loaded RGB channels from LAS file")
+                    
+                    # Load extra dimensions as scalar fields
+                    for dim_name in las.point_format.extra_dimension_names:
+                        try:
+                            scalar_fields_to_load[dim_name] = np.array(getattr(las, dim_name))
+                            print(f"Loaded scalar field: {dim_name}")
+                        except Exception as e:
+                            print(f"Warning: Could not load extra dimension {dim_name}: {e}")
+                    
+                except ImportError:
+                    self.showNotification.emit("laspy library required for LAS/LAZ files. Install with: pip install laspy", "error")
+                    return None
+            else:
+                self.showNotification.emit(f"Unsupported file format: {file_ext}", "error")
+                return None
+            
+            # Create a simple point cloud wrapper for standalone mode
+            class StandalonePointCloud:
+                def __init__(self, points, name, file_path, scalar_fields=None):
+                    self._points = points
+                    self._name = name
+                    self._file_path = file_path
+                    self._scalar_fields = scalar_fields if scalar_fields else {}
+                    
+                def points(self):
+                    return self._points
+                
+                def getName(self):
+                    return self._name
+                
+                def addScalarField(self, name):
+                    if name not in self._scalar_fields:
+                        self._scalar_fields[name] = np.zeros(len(self._points))
+                    return list(self._scalar_fields.keys()).index(name)
+                
+                def getScalarFieldIndexByName(self, name):
+                    if name in self._scalar_fields:
+                        return list(self._scalar_fields.keys()).index(name)
+                    return -1
+                
+                def getScalarField(self, index):
+                    if isinstance(index, int):
+                        name = list(self._scalar_fields.keys())[index]
+                    else:
+                        name = index
+                    
+                    class ScalarField:
+                        def __init__(self, data):
+                            self.data = data
+                        def asArray(self):
+                            return self.data
+                        def computeMinAndMax(self):
+                            pass
+                    return ScalarField(self._scalar_fields[name])
+                
+                def setCurrentDisplayedScalarField(self, index):
+                    pass
+                
+                def showSF(self, show):
+                    pass
+            
+            pc = StandalonePointCloud(
+                pcd, 
+                os.path.basename(self.standalone_file_path), 
+                self.standalone_file_path,
+                scalar_fields_to_load
+            )
+            result = [pc]
+            
+            # Cache the point cloud for future use
+            self.standalone_point_cloud = result
+            
+            return result
+            
+        except Exception as e:
+            self.showNotification.emit(f"Error loading point cloud: {str(e)}", "error")
+            import traceback
+            traceback.print_exc()
+            return None
+            return None
+
+    def saveStandaloneResults(self, step_name="results"):
+        """Save the current point cloud with all scalar fields to LAS file"""
+        if self.standalone_point_cloud is None or len(self.standalone_point_cloud) == 0:
+            return None
+        
+        # Skip LAS save for treeloc step (only TXT file is saved separately)
+        if step_name == "treeloc":
+            print(f"Skipping LAS save for treeloc step (tree locations saved as TXT)")
+            return None
+        
+        try:
+            pc = self.standalone_point_cloud[0]
+            
+            # Use input file directory as output directory
+            if hasattr(pc, '_file_path') and pc._file_path:
+                output_dir = os.path.dirname(pc._file_path)
+            else:
+                output_dir = os.path.join(self.log_local_path, "processed_results")
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # Generate filename (no timestamp, use step name)
+            base_name = os.path.splitext(os.path.basename(pc._name))[0]
+            # Remove existing step suffix if present (e.g., _stemcls, _treeloc)
+            for suffix in ['_stemcls', '_treeloc', '_treeoff', '_crownoff', '_stemoff']:
+                if base_name.endswith(suffix):
+                    base_name = base_name[:-len(suffix)]
+                    break
+            
+            output_file = os.path.join(output_dir, f"{base_name}_{step_name}.las")
+            
+            # Save as LAS file with scalar fields
+            try:
+                import laspy
+                
+                # Create LAS file
+                header = laspy.LasHeader(point_format=3, version="1.4")
+                header.offsets = np.min(pc._points, axis=0)
+                header.scales = np.array([0.001, 0.001, 0.001])  # 1mm precision
+                
+                las = laspy.LasData(header)
+                
+                # Set coordinates
+                las.x = pc._points[:, 0]
+                las.y = pc._points[:, 1]
+                las.z = pc._points[:, 2]
+                
+                # Add RGB channels if available in original data
+                if 'red' in pc._scalar_fields and 'green' in pc._scalar_fields and 'blue' in pc._scalar_fields:
+                    try:
+                        las.red = pc._scalar_fields['red'].astype(np.uint16)
+                        las.green = pc._scalar_fields['green'].astype(np.uint16)
+                        las.blue = pc._scalar_fields['blue'].astype(np.uint16)
+                        print(f"Preserved RGB channels in output file")
+                    except Exception as e:
+                        print(f"Warning: Could not preserve RGB channels: {e}")
+                
+                # Add scalar fields as extra dimensions
+                for field_name, field_data in pc._scalar_fields.items():
+                    # Skip RGB channels (already added above)
+                    if field_name in ['red', 'green', 'blue']:
+                        continue
+                    try:
+                        # Determine appropriate data type based on field name and content
+                        if field_name in ['itc', 'stemcls', 'stemoff', 'treeloc']:
+                            # Integer fields for classification/IDs
+                            dtype = np.int32
+                        else:
+                            dtype = np.float32
+                        
+                        # Add as extra dimension
+                        las.add_extra_dim(laspy.ExtraBytesParams(
+                            name=field_name,
+                            type=dtype
+                        ))
+                        setattr(las, field_name, field_data.astype(dtype))
+                        print(f"[Save] Added scalar field '{field_name}' as {dtype.__name__}")
+                    except Exception as e:
+                        print(f"Warning: Could not add scalar field {field_name}: {e}")
+                
+                # Write LAS file
+                las.write(output_file)
+                
+                # Update the cached point cloud to point to the new file
+                pc._file_path = output_file
+                pc._name = os.path.basename(output_file)
+                self.standalone_file_path = output_file
+                
+                self.showNotification.emit(f"Results saved to: {os.path.basename(output_file)}", "success")
+                print(f"Saved results to: {output_file}")
+                
+                return output_file
+                
+            except ImportError:
+                # Fallback to NPZ if laspy not available
+                print("Warning: laspy not available, saving as NPZ instead")
+                output_file = os.path.join(output_dir, f"{base_name}_{step_name}.npz")
+                
+                save_data = {
+                    'points': pc._points,
+                    'name': pc._name
+                }
+                
+                for field_name, field_data in pc._scalar_fields.items():
+                    save_data[f'field_{field_name}'] = field_data
+                
+                np.savez_compressed(output_file, **save_data)
+                
+                self.showNotification.emit(f"Results saved to NPZ: {os.path.basename(output_file)}", "success")
+                print(f"Saved results to: {output_file}")
+                
+                return output_file
+            
+        except Exception as e:
+            self.showNotification.emit(f"Error saving results: {str(e)}", "error")
+            import traceback
+            traceback.print_exc()
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def exportStandaloneResults(self, format_type="txt"):
+        """Export results to various formats (txt, csv, las)"""
+        if self.standalone_point_cloud is None or len(self.standalone_point_cloud) == 0:
+            self.showNotification.emit("No point cloud data to export", "warning")
+            return None
+        
+        try:
+            pc = self.standalone_point_cloud[0]
+            
+            # Use input file directory as output directory
+            if hasattr(pc, '_file_path') and pc._file_path:
+                output_dir = os.path.dirname(pc._file_path)
+            else:
+                output_dir = os.path.join(self.log_local_path, "exported_results")
+            os.makedirs(output_dir, exist_ok=True)
+            
+            # Generate filename
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            base_name = os.path.splitext(os.path.basename(pc._name))[0]
+            
+            if format_type == "txt" or format_type == "xyz":
+                # Export as ASCII text file with all columns
+                output_file = os.path.join(output_dir, f"{base_name}_exported_{timestamp}.txt")
+                
+                # Combine points and scalar fields
+                data_to_save = [pc._points]
+                header = "X Y Z"
+                
+                for field_name, field_data in pc._scalar_fields.items():
+                    data_to_save.append(field_data.reshape(-1, 1))
+                    header += f" {field_name}"
+                
+                combined_data = np.hstack(data_to_save)
+                np.savetxt(output_file, combined_data, fmt='%.6f', header=header, comments='')
+                
+            elif format_type == "csv":
+                # Export as CSV
+                output_file = os.path.join(output_dir, f"{base_name}_exported_{timestamp}.csv")
+                
+                data_to_save = [pc._points]
+                header = "X,Y,Z"
+                
+                for field_name, field_data in pc._scalar_fields.items():
+                    data_to_save.append(field_data.reshape(-1, 1))
+                    header += f",{field_name}"
+                
+                combined_data = np.hstack(data_to_save)
+                np.savetxt(output_file, combined_data, fmt='%.6f', delimiter=',', header=header, comments='')
+                
+            elif format_type == "npy":
+                # Export as numpy binary with metadata
+                output_file = os.path.join(output_dir, f"{base_name}_exported_{timestamp}.npz")
+                save_data = {
+                    'points': pc._points,
+                    'name': pc._name
+                }
+                for field_name, field_data in pc._scalar_fields.items():
+                    save_data[field_name] = field_data
+                np.savez_compressed(output_file, **save_data)
+                
+            else:
+                self.showNotification.emit(f"Unsupported export format: {format_type}", "error")
+                return None
+            
+            self.showNotification.emit(f"Exported to: {os.path.basename(output_file)}", "success")
+            print(f"Exported results to: {output_file}")
+            
+            return output_file
+            
+        except Exception as e:
+            self.showNotification.emit(f"Error exporting results: {str(e)}", "error")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def loadSavedResults(self, file_path):
+        """Load previously saved results from NPZ file"""
+        try:
+            data = np.load(file_path)
+            
+            # Create StandalonePointCloud from saved data
+            class StandalonePointCloud:
+                def __init__(self, points, name, file_path):
+                    self._points = points
+                    self._name = name
+                    self._file_path = file_path
+                    self._scalar_fields = {}
+                    
+                def points(self):
+                    return self._points
+                
+                def getName(self):
+                    return self._name
+                
+                def addScalarField(self, name):
+                    if name not in self._scalar_fields:
+                        self._scalar_fields[name] = np.zeros(len(self._points))
+                    return list(self._scalar_fields.keys()).index(name)
+                
+                def getScalarFieldIndexByName(self, name):
+                    if name in self._scalar_fields:
+                        return list(self._scalar_fields.keys()).index(name)
+                    return -1
+                
+                def getScalarField(self, index):
+                    if isinstance(index, int):
+                        name = list(self._scalar_fields.keys())[index]
+                    else:
+                        name = index
+                    
+                    class ScalarField:
+                        def __init__(self, data):
+                            self.data = data
+                        def asArray(self):
+                            return self.data
+                        def computeMinAndMax(self):
+                            pass
+                    return ScalarField(self._scalar_fields[name])
+                
+                def setCurrentDisplayedScalarField(self, index):
+                    pass
+                
+                def showSF(self, show):
+                    pass
+            
+            points = data['points']
+            name = str(data['name']) if 'name' in data else os.path.basename(file_path)
+            
+            pc = StandalonePointCloud(points, name, file_path)
+            
+            # Load all scalar fields
+            for key in data.keys():
+                if key.startswith('field_'):
+                    field_name = key[6:]  # Remove 'field_' prefix
+                    pc._scalar_fields[field_name] = data[key]
+                elif key not in ['points', 'name']:
+                    # Also load fields without prefix (for backward compatibility)
+                    pc._scalar_fields[key] = data[key]
+            
+            self.standalone_point_cloud = [pc]
+            self.standalone_file_path = file_path
+            
+            self.showNotification.emit(f"Loaded results from: {os.path.basename(file_path)}", "success")
+            print(f"Loaded {len(pc._scalar_fields)} scalar fields: {list(pc._scalar_fields.keys())}")
+            
+            return [pc]
+            
+        except Exception as e:
+            self.showNotification.emit(f"Error loading saved results: {str(e)}", "error")
+            import traceback
+            traceback.print_exc()
+            return None
 
     def checkModelExistence(self,model_path,model_name):
         if not os.path.exists(model_path):
@@ -291,7 +689,29 @@ class WebInterface(QObject):
         print(f"Returning model list: {result}")
         return result
 
-
+    def findLatestProcessedFile(self, base_path, step_prefixes):
+        """Find the latest processed LAS file for the given step prefixes"""
+        if not base_path:
+            return None
+        
+        base_dir = os.path.dirname(base_path)
+        base_name = os.path.splitext(os.path.basename(base_path))[0]
+        
+        # Remove any existing step suffix from base name
+        for suffix in ['_stemcls', '_treeloc', '_treeoff', '_crownoff']:
+            if base_name.endswith(suffix):
+                base_name = base_name[:-len(suffix)]
+                break
+        
+        # Look for files with step prefixes (in reverse order - most recent first)
+        for step_prefix in step_prefixes:
+            potential_file = os.path.join(base_dir, f"{base_name}_{step_prefix}.las")
+            if os.path.exists(potential_file):
+                print(f"Found processed file: {potential_file}")
+                return potential_file
+        
+        # Fall back to original file
+        return base_path
 
 
 
@@ -306,7 +726,13 @@ class WebInterface(QObject):
 
         try:
             # Get selected entities
-            pcs = CC.getSelectedEntities()
+            if PYCC_AVAILABLE:
+                pcs = CC.getSelectedEntities()
+            else:
+                # Standalone mode - load from file
+                pcs = self.loadStandalonePointCloud()
+                if pcs is None:
+                    return False
 
             model_name = self.selected_model
             print(f"Using model: {model_name}")
@@ -397,10 +823,15 @@ class WebInterface(QObject):
             pc.showSF(True)
 
             # Update UI
-            CC.redrawAll()
-            CC.updateUI()
+            if PYCC_AVAILABLE:
+                CC.redrawAll()
+                CC.updateUI()
 
             self.showNotification.emit(f"TreeFilter processing completed for {pc.getName()}", "success")
+            
+            # Auto-save results in standalone mode
+            if not PYCC_AVAILABLE:
+                self.saveStandaloneResults(step_name=f"{component_type}")
 
         except Exception as e:
             self.showNotification.emit(f"Error updating results: {str(e)}", "error")
@@ -411,7 +842,12 @@ class WebInterface(QObject):
         if not self.checkSelection():
             return False
 
-        pcs = CC.getSelectedEntities()
+        if PYCC_AVAILABLE:
+            pcs = CC.getSelectedEntities()
+        else:
+            pcs = self.loadStandalonePointCloud()
+            if pcs is None:
+                return False
 
         try:
             for pc in pcs:
@@ -458,8 +894,9 @@ class WebInterface(QObject):
                     pc.setCurrentDisplayedScalarField(connected_component_field)
                     pc.showSF(True)
 
-                CC.redrawAll()
-                CC.updateUI()
+                if PYCC_AVAILABLE:
+                    CC.redrawAll()
+                    CC.updateUI()
 
             self.progressUpdated.emit(100)
             return True
@@ -476,7 +913,12 @@ class WebInterface(QObject):
 
         try:
             # Get selected entities
-            pcs = CC.getSelectedEntities()
+            if PYCC_AVAILABLE:
+                pcs = CC.getSelectedEntities()
+            else:
+                pcs = self.loadStandalonePointCloud()
+                if pcs is None:
+                    return False
             for pc in pcs:
                 if self.checkPointCloudType(type(pc).__name__):
                     return False
@@ -505,16 +947,37 @@ class WebInterface(QObject):
                     buffer_size = None
 
                 dtm = createDtm(pcd_new, resolution=np.array([resolution, resolution]), tile_size=tile_size, buffer_size=buffer_size)
-                dtm_pcd = pycc.ccPointCloud(f"{pc.getName()}_dtm")
-                for dtm_pt in dtm:
-                    dtm_pcd.addPoint(cccorelib.CCVector3(dtm_pt[0], dtm_pt[1], dtm_pt[2]))
+                
+                if PYCC_AVAILABLE:
+                    dtm_pcd = pycc.ccPointCloud(f"{pc.getName()}_dtm")
+                    for dtm_pt in dtm:
+                        dtm_pcd.addPoint(cccorelib.CCVector3(dtm_pt[0], dtm_pt[1], dtm_pt[2]))
 
-                self.progressUpdated.emit(100)
+                    self.progressUpdated.emit(100)
 
-                pc.addChild(dtm_pcd)
-                CC.addToDB(dtm_pcd)
-                CC.redrawAll()
-                CC.updateUI()
+                    pc.addChild(dtm_pcd)
+                    CC.addToDB(dtm_pcd)
+                    CC.redrawAll()
+                    CC.updateUI()
+                else:
+                    # In standalone mode, save DTM to file
+                    self.progressUpdated.emit(100)
+                    try:
+                        # Use input file directory as output directory
+                        if hasattr(pc, '_file_path') and pc._file_path:
+                            output_dir = os.path.dirname(pc._file_path)
+                        else:
+                            output_dir = os.path.join(self.log_local_path, "dtm_results")
+                        os.makedirs(output_dir, exist_ok=True)
+                        from datetime import datetime
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        dtm_file = os.path.join(output_dir, f"{pc.getName()}_dtm_{timestamp}.txt")
+                        np.savetxt(dtm_file, dtm, fmt='%.6f', header='X Y Z', comments='')
+                        print(f"DTM saved to: {dtm_file}")
+                        self.showNotification.emit(f"DTM created and saved to {dtm_file}", "success")
+                    except Exception as save_error:
+                        print(f"Could not save DTM: {save_error}")
+                        self.showNotification.emit(f"DTM created ({len(dtm)} points)", "success")
             return True
         except Exception as e:
             self.showNotification.emit(f"Error in DTM creation: {str(e)}", "error")
@@ -524,73 +987,128 @@ class WebInterface(QObject):
     @pyqtSlot(bool, bool, float,float, float, float, float, float, float, result=bool)
     def treeLoc(self, use_gpu, if_stem, cutoff_thresh, conf_thresh, min_rad, max_gap, nms_thresh,custom_voxel_res_xy,custom_voxel_res_z):
         """Apply component filtering to the selected point cloud using 3D deep learning"""
-        print(f"Apply TreeLoc extraction with use_gpu={use_gpu}")
-        print(f"Currently selected model: {self.selected_model}")
+        print(f"\n{'='*60}")
+        print(f"[TreeLoc] Starting TreeLoc extraction with use_gpu={use_gpu}")
+        print(f"[TreeLoc] Currently selected model: {self.selected_model}")
+        print(f"[TreeLoc] Parameters: if_stem={if_stem}, cutoff_thresh={cutoff_thresh}, conf_thresh={conf_thresh}")
+        print(f"[TreeLoc] Parameters: min_rad={min_rad}, max_gap={max_gap}, nms_thresh={nms_thresh}")
+        print(f"[TreeLoc] Custom voxel resolution: XY={custom_voxel_res_xy}, Z={custom_voxel_res_z}")
+        print(f"{'='*60}")
 
         if not self.checkSelection():
+            print("[TreeLoc] No point cloud selection found.")
             return False
 
         try:
             # Get selected entities
-            pcs = CC.getSelectedEntities()
+            print("[TreeLoc] Retrieving point clouds...")
+            if PYCC_AVAILABLE:
+                print("[TreeLoc] Using CloudCompare API")
+                pcs = CC.getSelectedEntities()
+            else:
+                # In standalone mode, look for the latest processed file (stemcls)
+                # This ensures we load the file with stemcls scalar field
+                print("[TreeLoc] Running in standalone mode")
+                if hasattr(self, 'standalone_file_path') and self.standalone_file_path:
+                    latest_file = self.findLatestProcessedFile(
+                        self.standalone_file_path, 
+                        ['stemcls']  # Look for stemcls output first
+                    )
+                    if latest_file != self.standalone_file_path:
+                        print(f"[TreeLoc] Loading from processed file: {latest_file}")
+                        self.standalone_file_path = latest_file
+                
+                print("[TreeLoc] Loading standalone point cloud...")
+                pcs = self.loadStandalonePointCloud()
+                if pcs is None:
+                    print("[TreeLoc] Failed to load standalone point cloud")
+                    return False
+            print(f"[TreeLoc] Successfully retrieved point cloud(s)")
 
-            for pc in pcs:
+            for pc_idx, pc in enumerate(pcs if isinstance(pcs, list) else [pcs]):
+                print(f"\n[TreeLoc] Processing point cloud {pc_idx + 1}")
                 if self.checkPointCloudType(type(pc).__name__):
+                    print("[TreeLoc] Invalid point cloud type")
                     return False
 
                 # Get point cloud data
+                print("[TreeLoc] Extracting point cloud data...")
                 pcd = pc.points()
+                print(f"[TreeLoc] Point cloud contains {len(pcd)} points")
 
                 if len(pcd)<10000:
                     response = QMessageBox.question(None, "Confirmation Required", f"The point cloud has only {len(pcd)}. Make sure you select the correct point cloud(s). Do you want to continue?",
                                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
                     if response != QMessageBox.StandardButton.Yes:
                         self.showNotification.emit("Operation cancelled by user", "info")
+                        print("[TreeLoc] Operation cancelled by user due to low point count")
                         return False
 
                 # Get selected model
                 if not self.selected_model:
                     self.showNotification.emit("No model selected", "error")
+                    print("[TreeLoc] No model selected")
                     return False
 
                 model_name = self.selected_model
-                print(f"Using model: {model_name}")
+                print(f"[TreeLoc] Using model: {model_name}")
 
                 # Configure paths
                 config_file = os.path.join(self.current_directory, f'modules/treeisonet/{model_name}.json')
                 model_path = os.path.join(self.model_local_path, f"{model_name}.pth")
+                print(f"[TreeLoc] Config file: {config_file}")
+                print(f"[TreeLoc] Model path: {model_path}")
 
                 # Check if model exists
                 if not self.checkModelExistence(model_path, model_name):
+                    print(f"[TreeLoc] Model file not found: {model_path}")
                     return False
 
                 # Import DL filter module
+                print("[TreeLoc] Importing treeLoc module...")
                 from modules.treeisonet.treeLoc import treeLoc
+                print("[TreeLoc] treeLoc module imported successfully")
 
                 self.progressUpdated.emit(5)
 
                 # Check for tree filter field
+                print("[TreeLoc] Checking for treefilter scalar field...")
                 treefilter_field = pc.getScalarFieldIndexByName("treefilter")
                 if treefilter_field >= 0:
+                    print(f"[TreeLoc] Found treefilter field at index {treefilter_field}")
                     treefilter = np.array(pc.getScalarField(treefilter_field).asArray()).astype(np.int32)
                     treefilter_ind = treefilter > 1.0
                     pcd_abg = pcd[treefilter_ind]
+                    print(f"[TreeLoc] Filtered to {len(pcd_abg)} points using treefilter")
                 else:
+                    print("[TreeLoc] No treefilter field found, using all points")
                     pcd_abg = pcd
                     treefilter_ind = None
 
                 if if_stem:
+                    print("[TreeLoc] if_stem=True, checking for stemcls field...")
                     stemcls_field = pc.getScalarFieldIndexByName("stemcls")
                     if stemcls_field < 0:  # ccPointCloud(point cloud),ccHObject(grouped)
                         self.showNotification.emit("Please extract stems points by running stemcls first", "warning")
                         self.progressUpdated.emit(0)
+                        print("[TreeLoc] ERROR: stemcls field not found. Running stemcls is required when if_stem=True")
                         return False
+                    print(f"[TreeLoc] Found stemcls field at index {stemcls_field}")
                     stemcls = np.array(pc.getScalarField(stemcls_field).asArray()).astype(np.int32)
                     if treefilter_field >= 0:
                         stemcls=stemcls[treefilter_ind]
                     pcd_abg=pcd_abg[stemcls>1]
+                    print(f"[TreeLoc] Filtered to {len(pcd_abg)} stem points")
+                else:
+                    print("[TreeLoc] if_stem=False, using full point cloud for TreeLoc")
 
                 # Create and configure the worker
+                print(f"[TreeLoc] Creating worker thread...")
+                print(f"[TreeLoc] Input point cloud shape: {pcd_abg.shape}")
+                print(f"[TreeLoc] Config: {config_file}")
+                print(f"[TreeLoc] Model: {model_path}")
+                print(f"[TreeLoc] GPU: {use_gpu}")
+                
                 worker = Worker(treeLoc,
                                 config_file,
                                 pcd_abg,
@@ -608,12 +1126,16 @@ class WebInterface(QObject):
                                              self.showNotification.emit(f"Error in TreeLoc processing: {error}","error"))
 
                 # Keep a reference to the worker
+                print(f"[TreeLoc] Starting worker thread...")
                 self.workers.append(worker)
                 worker.start()
+                print(f"[TreeLoc] Worker thread started. Waiting for results...")
 
                 return True
 
         except Exception as e:
+            print(f"[TreeLoc] ERROR: {str(e)}")
+            print(f"[TreeLoc] Traceback: {traceback.format_exc()}")
             self.showNotification.emit(f"Error in TreeLoc processing: {str(e)}", "error")
             self.progressUpdated.emit(0)
             return False
@@ -675,23 +1197,47 @@ class WebInterface(QObject):
 
             # Set progress to 100%
             self.progressUpdated.emit(100)
-            # Create location point cloud
-            loc_pcd = pycc.ccPointCloud(f"{pc.getName()}_loc")
-            self.showNotification.emit(f"Number of tree locations extracted: {str(len(pred_treeloc_tops))}", "error")
+            
+            # Create location point cloud (only in CloudCompare mode)
+            if PYCC_AVAILABLE:
+                loc_pcd = pycc.ccPointCloud(f"{pc.getName()}_loc")
+                self.showNotification.emit(f"Number of tree locations extracted: {str(len(pred_treeloc_tops))}", "success")
 
-            for treeloc_top in pred_treeloc_tops:
-                loc_pcd.addPoint(cccorelib.CCVector3(treeloc_top[0], treeloc_top[1], treeloc_top[2]))
+                for treeloc_top in pred_treeloc_tops:
+                    loc_pcd.addPoint(cccorelib.CCVector3(treeloc_top[0], treeloc_top[1], treeloc_top[2]))
 
-            loc_pcd.setPointSize(16)
+                loc_pcd.setPointSize(16)
 
-            pc.addChild(loc_pcd)
-            CC.addToDB(loc_pcd)
+                pc.addChild(loc_pcd)
+                CC.addToDB(loc_pcd)
 
-            # Update UI
-            CC.redrawAll()
-            CC.updateUI()
+                # Update UI
+                CC.redrawAll()
+                CC.updateUI()
+            else:
+                # In standalone mode, just show the count
+                self.showNotification.emit(f"Number of tree locations extracted: {str(len(pred_treeloc_tops))}", "success")
+                # Optionally save tree locations to a separate file
+                try:
+                    # Use input file directory as output directory
+                    if hasattr(pc, '_file_path') and pc._file_path:
+                        output_dir = os.path.dirname(pc._file_path)
+                    else:
+                        output_dir = os.path.join(self.log_local_path, "tree_locations")
+                    os.makedirs(output_dir, exist_ok=True)
+                    from datetime import datetime
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    loc_file = os.path.join(output_dir, f"{pc.getName()}_treeloc_{timestamp}.txt")
+                    np.savetxt(loc_file, pred_treeloc_tops, fmt='%.6f', header='X Y Z', comments='')
+                    print(f"Tree locations saved to: {loc_file}")
+                except Exception as save_error:
+                    print(f"Could not save tree locations: {save_error}")
 
             self.showNotification.emit(f"TreeLoc processing completed for {pc.getName()}", "success")
+            
+            # Auto-save results in standalone mode
+            if not PYCC_AVAILABLE:
+                self.saveStandaloneResults(step_name="treeloc")
 
         except Exception as e:
             self.showNotification.emit(f"Error updating results: {str(e)}", "error")
@@ -775,21 +1321,40 @@ class WebInterface(QObject):
             # Set progress to 100%
             self.progressUpdated.emit(100)
 
-            # Create location point cloud
-            loc_pcd = pycc.ccPointCloud(f"{pc.getName()}_loc")
-            self.showNotification.emit(f"Number of tree locations extracted: {str(len(pred_treelocs))}", "error")
+            # Create location point cloud (only in CloudCompare mode)
+            if PYCC_AVAILABLE:
+                loc_pcd = pycc.ccPointCloud(f"{pc.getName()}_loc")
+                self.showNotification.emit(f"Number of tree locations extracted: {str(len(pred_treelocs))}", "success")
 
-            for pred_treeloc in pred_treelocs:
-                loc_pcd.addPoint(cccorelib.CCVector3(pred_treeloc[0], pred_treeloc[1], pred_treeloc[2]))
+                for pred_treeloc in pred_treelocs:
+                    loc_pcd.addPoint(cccorelib.CCVector3(pred_treeloc[0], pred_treeloc[1], pred_treeloc[2]))
 
-            loc_pcd.setPointSize(16)
+                loc_pcd.setPointSize(16)
 
-            pc.addChild(loc_pcd)
-            CC.addToDB(loc_pcd)
+                pc.addChild(loc_pcd)
+                CC.addToDB(loc_pcd)
 
-            # Update UI
-            CC.redrawAll()
-            CC.updateUI()
+                # Update UI
+                CC.redrawAll()
+                CC.updateUI()
+            else:
+                # In standalone mode, just show the count
+                self.showNotification.emit(f"Number of tree locations extracted: {str(len(pred_treelocs))}", "success")
+                # Save tree locations to a separate file
+                try:
+                    # Use input file directory as output directory
+                    if hasattr(pc, '_file_path') and pc._file_path:
+                        output_dir = os.path.dirname(pc._file_path)
+                    else:
+                        output_dir = os.path.join(self.log_local_path, "tree_locations")
+                    os.makedirs(output_dir, exist_ok=True)
+                    from datetime import datetime
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    loc_file = os.path.join(output_dir, f"{pc.getName()}_treeloc_refined_{timestamp}.txt")
+                    np.savetxt(loc_file, pred_treelocs, fmt='%.6f', header='X Y Z', comments='')
+                    print(f"Refined tree locations saved to: {loc_file}")
+                except Exception as save_error:
+                    print(f"Could not save tree locations: {save_error}")
 
             self.showNotification.emit(f"TreeLoc processing completed for {pc.getName()}", "success")
 
@@ -925,8 +1490,9 @@ class WebInterface(QObject):
             pc.showSF(True)
 
             # Update UI
-            CC.redrawAll()
-            CC.updateUI()
+            if PYCC_AVAILABLE:
+                CC.redrawAll()
+                CC.updateUI()
 
             self.showNotification.emit(f"TreeOff processing completed for {pc.getName()}", "success")
             return True
@@ -944,7 +1510,23 @@ class WebInterface(QObject):
 
         try:
             # Get selected entities
-            pcs = CC.getSelectedEntities()
+            if PYCC_AVAILABLE:
+                pcs = CC.getSelectedEntities()
+            else:
+                # In standalone mode, load from the latest processed file
+                if hasattr(self, 'standalone_file_path') and self.standalone_file_path:
+                    latest_file = self.findLatestProcessedFile(
+                        self.standalone_file_path, 
+                        ['stemcls']  # Look for stemcls (treeloc doesn't create LAS)
+                    )
+                    if latest_file != self.standalone_file_path:
+                        print(f"Loading from processed file: {latest_file}")
+                        self.standalone_file_path = latest_file
+                
+                pcs = self.loadStandalonePointCloud()
+                if pcs is None:
+                    return False
+                    
             for pc in pcs:
                 if self.checkPointCloudType(type(pc).__name__):
                     return False
@@ -960,26 +1542,105 @@ class WebInterface(QObject):
                     return False
                 stemcls = np.array(pc.getScalarField(stemcls_field).asArray()).astype(np.int32)
 
-                if pc.getChildrenNumber() == 0:
-                    self.showNotification.emit("Please extract stems locations by running treeloc first", "warning")
-                    self.progressUpdated.emit(0)
-                    return False
-                iter = 0
-                while (iter < pc.getChildrenNumber()):
-                    # self.show_info_messagebox((type(pc.getChild(iter)).__name__), "warning")
-                    if type(pc.getChild(iter)).__name__ == 'ccPointCloud':
-                        break
-                    iter += 1
-                if iter == pc.getChildrenNumber():
-                    self.showNotification.emit("Please ensure stem_base point cloud placed as a child of the selected point cloud", "warning")
-                    self.progressUpdated.emit(0)
-                    return False
+                # Get tree locations (stem base points)
+                stembase = None
+                if PYCC_AVAILABLE:
+                    # CloudCompare mode - get from child point cloud
+                    if pc.getChildrenNumber() == 0:
+                        self.showNotification.emit("Please extract stems locations by running treeloc first", "warning")
+                        self.progressUpdated.emit(0)
+                        return False
+                    iter = 0
+                    while (iter < pc.getChildrenNumber()):
+                        # self.show_info_messagebox((type(pc.getChild(iter)).__name__), "warning")
+                        if type(pc.getChild(iter)).__name__ == 'ccPointCloud':
+                            break
+                        iter += 1
+                    if iter == pc.getChildrenNumber():
+                        self.showNotification.emit("Please ensure stem_base point cloud placed as a child of the selected point cloud", "warning")
+                        self.progressUpdated.emit(0)
+                        return False
 
-                stembase = pc.getChild(iter).points()
-                if len(stembase) == 0:  # ccPointCloud(point cloud),ccHObject(grouped)
-                    self.showNotification.emit("No stem points. Please extract stems locations by running treeloc first", "warning")
-                    self.progressUpdated.emit(0)
-                    return False
+                    stembase = pc.getChild(iter).points()
+                    if len(stembase) == 0:  # ccPointCloud(point cloud),ccHObject(grouped)
+                        self.showNotification.emit("No stem points. Please extract stems locations by running treeloc first", "warning")
+                        self.progressUpdated.emit(0)
+                        return False
+                else:
+                    # Standalone mode - load tree locations from saved text file
+                    if hasattr(pc, '_file_path') and pc._file_path:
+                        base_dir = os.path.dirname(pc._file_path)
+                        base_name = os.path.splitext(os.path.basename(pc._file_path))[0]
+                        base_name_original = base_name  # Keep original name with suffix
+                        # Remove step suffix to get original name
+                        for suffix in ['_stemcls', '_treeloc', '_treeoff', '_crownoff']:
+                            if base_name.endswith(suffix):
+                                base_name = base_name[:-len(suffix)]
+                                break
+                        
+                        # Look for the most recent tree location file
+                        import glob
+                        print(f"Debug: Looking for tree locations in: {base_dir}")
+                        print(f"Debug: Base name: {base_name}")
+                        print(f"Debug: Original name: {base_name_original}")
+                        
+                        # Try multiple patterns to find tree location files
+                        patterns_to_try = [
+                            os.path.join(base_dir, f"{base_name_original}.las_treeloc_*.txt"),  # With step suffix + .las
+                            os.path.join(base_dir, f"{base_name}.las_treeloc_*.txt"),           # Without step suffix + .las
+                            os.path.join(base_dir, f"{base_name_original}_treeloc_*.txt"),      # With step suffix, no .las
+                            os.path.join(base_dir, f"{base_name}_treeloc_*.txt")                # Without step suffix, no .las
+                        ]
+                        
+                        loc_files = []
+                        for i, pattern in enumerate(patterns_to_try):
+                            print(f"Debug: Search pattern {i+1}: {pattern}")
+                            found = glob.glob(pattern)
+                            if found:
+                                loc_files.extend(found)
+                                print(f"Debug: Found {len(found)} files with pattern {i+1}")
+                        
+                        # Remove duplicates while preserving order
+                        loc_files = list(dict.fromkeys(loc_files))
+                        
+                        print(f"Debug: Total found {len(loc_files)} tree location files")
+                        if loc_files:
+                            print(f"Debug: Files found: {loc_files}")
+                        
+                        if loc_files:
+                            # Get the most recent file
+                            latest_loc_file = max(loc_files, key=os.path.getmtime)
+                            print(f"Loading tree locations from: {latest_loc_file}")
+                            try:
+                                # Skip header line when loading
+                                stembase = np.loadtxt(latest_loc_file, skiprows=1)
+                                if stembase.ndim == 1:
+                                    stembase = stembase.reshape(1, -1)
+                                print(f"Loaded {len(stembase)} tree locations")
+                            except Exception as e:
+                                print(f"Error loading tree locations: {e}")
+                                # Try without skiprows in case there's no header
+                                try:
+                                    stembase = np.loadtxt(latest_loc_file)
+                                    if stembase.ndim == 1:
+                                        stembase = stembase.reshape(1, -1)
+                                except:
+                                    self.showNotification.emit(f"Error reading tree location file: {str(e)}", "error")
+                                    self.progressUpdated.emit(0)
+                                    return False
+                        else:
+                            self.showNotification.emit("Please extract tree locations by running treeloc first", "warning")
+                            self.progressUpdated.emit(0)
+                            return False
+                    else:
+                        self.showNotification.emit("Cannot find tree location file", "warning")
+                        self.progressUpdated.emit(0)
+                        return False
+                    
+                    if len(stembase) == 0:
+                        self.showNotification.emit("No tree locations found. Please run treeloc first", "warning")
+                        self.progressUpdated.emit(0)
+                        return False
 
                 from modules.treeisonet.stemCluster import shortestpath3D
 
@@ -1024,8 +1685,12 @@ class WebInterface(QObject):
             pc.setCurrentDisplayedScalarField(stemoff_field)
             pc.showSF(True)
 
-            CC.redrawAll()
-            CC.updateUI()
+            if PYCC_AVAILABLE:
+                CC.redrawAll()
+                CC.updateUI()
+            else:
+                # Auto-save in standalone mode
+                self.saveStandaloneResults(step_name="stemoff")
 
             self.showNotification.emit(f"stemClusterSP processing completed for {pc.getName()}", "success")
 
@@ -1043,7 +1708,23 @@ class WebInterface(QObject):
 
         try:
             # Get selected entities
-            pcs = CC.getSelectedEntities()
+            if PYCC_AVAILABLE:
+                pcs = CC.getSelectedEntities()
+            else:
+                # In standalone mode, load from the latest processed file
+                if hasattr(self, 'standalone_file_path') and self.standalone_file_path:
+                    latest_file = self.findLatestProcessedFile(
+                        self.standalone_file_path, 
+                        ['stemoff', 'stemcls']  # Look for stemoff or stemcls
+                    )
+                    if latest_file != self.standalone_file_path:
+                        print(f"Loading from processed file: {latest_file}")
+                        self.standalone_file_path = latest_file
+                
+                pcs = self.loadStandalonePointCloud()
+                if pcs is None:
+                    return False
+
             for pc in pcs:
                 if self.checkPointCloudType(type(pc).__name__):
                     return False
@@ -1131,8 +1812,13 @@ class WebInterface(QObject):
             pc.getScalarField(itc_field).computeMinAndMax()  # must call this before the scalar field is updated in CC
             pc.setCurrentDisplayedScalarField(itc_field)
             pc.showSF(True)
-            CC.redrawAll()
-            CC.updateUI()
+
+            if PYCC_AVAILABLE:
+                CC.redrawAll()
+                CC.updateUI()
+            else:
+                # Auto-save in standalone mode
+                self.saveStandaloneResults(step_name="itc")
 
             self.showNotification.emit(f"crownClusterSP processing completed for {pc.getName()}", "success")
 
@@ -1153,55 +1839,96 @@ class WebInterface(QObject):
             return False
 
         try:
+            print("[CrownOff] Starting crownOff processing pipeline...")
+            
             # Get selected entities
-            pcs = CC.getSelectedEntities()
+            if PYCC_AVAILABLE:
+                pcs = CC.getSelectedEntities()
+                print(f"[CrownOff] CloudCompare mode - Found {len(pcs)} point cloud(s)")
+            else:
+                # In standalone mode, load from the latest processed file
+                print("[CrownOff] Standalone mode - Loading point cloud from file...")
+                if hasattr(self, 'standalone_file_path') and self.standalone_file_path:
+                    latest_file = self.findLatestProcessedFile(
+                        self.standalone_file_path, 
+                        ['stemoff', 'stemcls']  # Look for stemoff first, then stemcls
+                    )
+                    if latest_file != self.standalone_file_path:
+                        print(f"[CrownOff] Loading from processed file: {latest_file}")
+                        self.standalone_file_path = latest_file
+                
+                pcs = self.loadStandalonePointCloud()
+                if pcs is None:
+                    print("[CrownOff] ERROR: Failed to load standalone point cloud")
+                    return False
+                print(f"[CrownOff] Successfully loaded {len(pcs) if pcs else 0} point cloud(s)")
 
             model_name = self.selected_model
-            print(f"Using model: {model_name}")
+            print(f"[CrownOff] Using model: {model_name}")
 
             # Configure paths
             config_file = os.path.join(self.current_directory, f'modules/treeisonet/{model_name}.json')
             model_path = os.path.join(self.model_local_path, f"{model_name}.pth")
+            print(f"[CrownOff] Config file: {config_file}")
+            print(f"[CrownOff] Model path: {model_path}")
 
             # Check if model exists
-            if not self.checkModelExistence(model_path,model_name):
+            if not self.checkModelExistence(model_path, model_name):
+                print(f"[CrownOff] ERROR: Model file not found or not available")
                 return False
+            print(f"[CrownOff] Model verified - Ready to process")
 
             for pc in pcs:
                 if self.checkPointCloudType(type(pc).__name__):
                     return False
 
+                print(f"[CrownOff] Processing point cloud: {pc.getName() if hasattr(pc, 'getName') else 'Unknown'}")
+                
                 # Get point cloud data
                 pcd = pc.points()
+                print(f"[CrownOff] Total points in cloud: {len(pcd):,}")
+                
                 # Get selected model
                 if not self.selected_model:
+                    print("[CrownOff] ERROR: No model selected")
                     self.showNotification.emit("No model selected", "error")
                     return False
 
                 # Import DL filter module
-                # current_script_path = os.path.dirname(os.path.realpath(__file__))
-                # sys.path.append(current_script_path)
+                print("[CrownOff] Importing crownOff module...")
                 from modules.treeisonet.crownOff import crownOff
+                
                 # Set progress to 0%
                 self.progressUpdated.emit(5)
+                print("[CrownOff] Progress: 5%")
 
+                print("[CrownOff] Checking for stemoff scalar field...")
                 itc_field = pc.getScalarFieldIndexByName(f"stemoff")
                 if itc_field < 0:
+                    print("[CrownOff] ERROR: stemoff field not found")
                     self.showNotification.emit("Please apply the StemClustering SP first", "warning")
                     self.progressUpdated.emit(0)
                     return
                 stem_id = np.array(pc.getScalarField(itc_field).asArray()).astype(np.int32)
+                print(f"[CrownOff] Loaded stemoff field with {len(stem_id):,} values")
 
+                print("[CrownOff] Checking for treefilter scalar field...")
                 treefilter_field = pc.getScalarFieldIndexByName("treefilter")
                 if treefilter_field >= 0:
                     treefilter = np.array(pc.getScalarField(treefilter_field).asArray()).astype(np.int32)
                     treefilter_ind = treefilter > 1.0
+                    filtered_count = np.sum(treefilter_ind)
+                    print(f"[CrownOff] Treefilter found - Using {filtered_count:,} filtered points out of {len(pcd):,}")
                     pcd_abg = pcd[treefilter_ind]
-                    stem_id=stem_id[treefilter_ind]
+                    stem_id = stem_id[treefilter_ind]
                 else:
+                    print("[CrownOff] Treefilter not found - Using all points")
                     pcd_abg = pcd
                     treefilter_ind = None
 
+                print(f"[CrownOff] Points to process: {len(pcd_abg):,}")
+                print("[CrownOff] Creating worker thread for crownOff inference...")
+                
                 # Create and set up the worker
                 worker = Worker(crownOff,
                                 config_file,
@@ -1212,51 +1939,113 @@ class WebInterface(QObject):
                                 progress_callback=self.process_events
                                 )
                 worker.progressUpdated.connect(self.progressUpdated)
-                worker.finished.connect(lambda success, preds: self._handle_crownoff_result(success, preds, pc,treefilter_ind))
+                worker.finished.connect(lambda success, preds: self._handle_crownoff_result(success, preds, pc, treefilter_ind))
                 worker.errorOccurred.connect(lambda error: self.showNotification.emit(f"Error in crownoff processing: {error}", "error"))
 
+                print("[CrownOff] Starting worker thread...")
                 # Keep a reference to the worker
                 self.workers.append(worker)
                 worker.start()
 
+                print("[CrownOff] Worker thread started - Processing in background...")
                 return True
 
         except Exception as e:
+            print(f"[CrownOff] ERROR: Exception occurred: {str(e)}")
+            import traceback
+            traceback.print_exc()
             self.showNotification.emit(f"Error in crownoff processing: {str(e)}", "error")
             self.progressUpdated.emit(0)
             return False
 
     def _handle_crownoff_result(self, success, preds, pc,treefilter_ind):
         """Handle the results from the worker thread for crownOff"""
+        print("[CrownOff] Result handler called - Processing predictions...")
+        print(f"[CrownOff] Success: {success}, Predictions shape: {preds.shape if preds is not None else 'None'}")
+        
         if not success or preds is None:
+            print("[CrownOff] ERROR: Worker thread failed or returned None predictions")
+            self.showNotification.emit("Error in crownoff neural network processing", "error")
+            self.progressUpdated.emit(0)
             return
-        self.progressUpdated.emit(100)
+        
+        print(f"[CrownOff] Processing {len(preds):,} predictions from neural network...")
+        self.progressUpdated.emit(70)
+        
         try:
             # Process the results
+            print(f"[CrownOff] Creating predictions array for point cloud with {len(pc.points()):,} points...")
             pred_treeitc = np.zeros(len(pc.points()), dtype=np.int32)
+            
             if treefilter_ind is not None:
+                print(f"[CrownOff] Mapping predictions back to original point cloud (using treefilter mask)...")
                 pred_treeitc[treefilter_ind] = preds
+                crown_count = np.sum(preds > 0)
+                print(f"[CrownOff] Predictions mapped - Crown points: {crown_count:,}, Non-crown: {len(preds) - crown_count:,}")
             else:
+                print(f"[CrownOff] Using predictions directly (no filtering applied)...")
                 pred_treeitc = preds
-            # Update CloudCompare scalar field
-            labels_field = pc.getScalarFieldIndexByName("itc")
-            if labels_field < 0:
-                labels_field = pc.addScalarField("itc")
+                crown_count = np.sum(preds > 0)
+                print(f"[CrownOff] Crown points: {crown_count:,}, Non-crown: {len(preds) - crown_count:,}")
+            
+            if PYCC_AVAILABLE:
+                # CloudCompare mode
+                print(f"[CrownOff] CloudCompare mode - Adding scalar field...")
+                labels_field = pc.getScalarFieldIndexByName("itc")
+                if labels_field < 0:
+                    labels_field = pc.addScalarField("itc")
+                    print(f"[CrownOff] Created new 'itc' scalar field")
+                else:
+                    print(f"[CrownOff] Updated existing 'itc' scalar field")
 
-            sfArray = pc.getScalarField(labels_field).asArray()
-            sfArray[:] = pred_treeitc
-            pc.getScalarField(labels_field).computeMinAndMax()
-            pc.setCurrentDisplayedScalarField(labels_field)
-            pc.showSF(True)
+                print(f"[CrownOff] Populating scalar field with {len(pred_treeitc):,} values...")
+                sfArray = pc.getScalarField(labels_field).asArray()
+                sfArray[:] = pred_treeitc
+                pc.getScalarField(labels_field).computeMinAndMax()
+                
+                # Get min/max from the array directly
+                min_val = np.min(pred_treeitc)
+                max_val = np.max(pred_treeitc)
+                print(f"[CrownOff] Scalar field statistics - Min: {min_val}, Max: {max_val}")
+                
+                pc.setCurrentDisplayedScalarField(labels_field)
+                pc.showSF(True)
+                print(f"[CrownOff] Display updated to show 'itc' scalar field")
+                
+                print(f"[CrownOff] CloudCompare mode - Redrawing and updating UI...")
+                CC.redrawAll()
+                CC.updateUI()
+            else:
+                # Standalone mode - update LAS file
+                print(f"[CrownOff] Standalone mode - Updating point cloud with predictions...")
+                print(f"[CrownOff] Adding 'itc' field to point cloud...")
+                
+                # Store predictions in the point cloud's scalar fields dictionary
+                # This ensures the field will be saved to the output LAS file
+                if len(self.standalone_point_cloud) > 0:
+                    pc = self.standalone_point_cloud[0]
+                    pc._scalar_fields['itc'] = pred_treeitc.astype(np.float32)
+                    print(f"[CrownOff] Stored 'itc' field in point cloud scalar fields")
+                    
+                    # Get min/max
+                    min_val = np.min(pred_treeitc)
+                    max_val = np.max(pred_treeitc)
+                    print(f"[CrownOff] Predictions statistics - Min: {min_val}, Max: {max_val}")
+                
+                print(f"[CrownOff] Standalone mode - Auto-saving results...")
+                self.saveStandaloneResults(step_name="crownoff")
+                print(f"[CrownOff] Results saved successfully")
 
-            # Update UI
-            CC.redrawAll()
-            CC.updateUI()
-
-            self.showNotification.emit(f"CrownOff processing completed for {pc.getName()}", "success")
+            print(f"[CrownOff] Processing complete!")
+            self.showNotification.emit(f"CrownOff processing completed", "success")
+            self.progressUpdated.emit(100)
 
         except Exception as e:
+            print(f"[CrownOff] ERROR during result handling: {str(e)}")
+            import traceback
+            traceback.print_exc()
             self.showNotification.emit(f"Error updating results: {str(e)}", "error")
+            self.progressUpdated.emit(0)
             self.progressUpdated.emit(0)
 
 
@@ -1322,7 +2111,22 @@ class WebInterface(QObject):
 
         try:
             # Get selected entities
-            pcs = CC.getSelectedEntities()
+            if PYCC_AVAILABLE:
+                pcs = CC.getSelectedEntities()
+            else:
+                # In standalone mode, load from the latest processed file
+                if hasattr(self, 'standalone_file_path') and self.standalone_file_path:
+                    latest_file = self.findLatestProcessedFile(
+                        self.standalone_file_path, 
+                        ['crownoff', 'stemoff', 'stemcls']  # Look for latest processing step
+                    )
+                    if latest_file != self.standalone_file_path:
+                        print(f"Loading from processed file: {latest_file}")
+                        self.standalone_file_path = latest_file
+                
+                pcs = self.loadStandalonePointCloud()
+                if pcs is None:
+                    return False
 
             for pc in pcs:
                 if self.checkPointCloudType(type(pc).__name__):
@@ -1386,8 +2190,12 @@ class WebInterface(QObject):
                 pc.showSF(True)
 
                 # Update UI
-                CC.redrawAll()
-                CC.updateUI()
+                if PYCC_AVAILABLE:
+                    CC.redrawAll()
+                    CC.updateUI()
+                else:
+                    # Auto-save in standalone mode
+                    self.saveStandaloneResults(step_name="init_segs")
 
                 self.progressUpdated.emit(100)
                 self.showNotification.emit(f"Initial segmentation completed for {pc.getName()}", "success")
@@ -1409,7 +2217,22 @@ class WebInterface(QObject):
 
         try:
             # Get selected entities
-            pcs = CC.getSelectedEntities()
+            if PYCC_AVAILABLE:
+                pcs = CC.getSelectedEntities()
+            else:
+                # In standalone mode, load from the latest processed file
+                if hasattr(self, 'standalone_file_path') and self.standalone_file_path:
+                    latest_file = self.findLatestProcessedFile(
+                        self.standalone_file_path, 
+                        ['init_segs', 'crownoff', 'stemoff', 'stemcls']  # Look for init_segs first
+                    )
+                    if latest_file != self.standalone_file_path:
+                        print(f"Loading from processed file: {latest_file}")
+                        self.standalone_file_path = latest_file
+                
+                pcs = self.loadStandalonePointCloud()
+                if pcs is None:
+                    return False
 
             for pc in pcs:
                 if self.checkPointCloudType(type(pc).__name__):
@@ -1457,54 +2280,149 @@ class WebInterface(QObject):
                 # Set progress to 0%
                 self.progressUpdated.emit(5)
 
+                print(f"[QSM] Starting QSM processing...")
+                print(f"[QSM] Input point cloud shape: {pcd_with_class.shape}")
+                print(f"[QSM] Gap connectivity: {gap_connectivity}, Max gap: {max_gap}")
+
                 # Apply QSM
-                tree, segs_centroids, segs_labels, tree_centroid_radius = applyQSM.applyQSM(
-                    pcd_with_class,
-                    max_connectivity_search_distance=gap_connectivity,
-                    occlusion_distance_cutoff=max_gap,
-                    progress_callback=lambda p: self.progressUpdated.emit(p)
-                )
+                try:
+                    print(f"[QSM] Calling applyQSM.applyQSM()...")
+                    tree, segs_centroids, segs_labels, tree_centroid_radius = applyQSM.applyQSM(
+                        pcd_with_class,
+                        max_connectivity_search_distance=gap_connectivity,
+                        occlusion_distance_cutoff=max_gap,
+                        progress_callback=lambda p: self.progressUpdated.emit(p)
+                    )
+                    print(f"[QSM] QSM completed successfully")
+                    print(f"[QSM] Tree structure type: {type(tree)}, length: {len(tree)}")
+                    print(f"[QSM] Segment centroids type: {type(segs_centroids)}, shape/length: {segs_centroids.shape if hasattr(segs_centroids, 'shape') else len(segs_centroids)}")
+                    print(f"[QSM] Segment labels type: {type(segs_labels)}, shape/length: {segs_labels.shape if hasattr(segs_labels, 'shape') else len(segs_labels)}")
+                    print(f"[QSM] Tree centroid radius type: {type(tree_centroid_radius)}, shape/length: {tree_centroid_radius.shape if hasattr(tree_centroid_radius, 'shape') else len(tree_centroid_radius)}")
+                    
+                    # Debug: Check segs_centroids dimensions
+                    if hasattr(segs_centroids, 'shape'):
+                        print(f"[QSM] segs_centroids.shape: {segs_centroids.shape}")
+                        if len(segs_centroids.shape) == 1:
+                            print(f"[QSM WARNING] segs_centroids is 1D array! Expected 2D array with shape (n_segments, 3)")
+                            print(f"[QSM] First 10 elements of segs_centroids: {segs_centroids[:10]}")
+                        else:
+                            print(f"[QSM] First 3 centroids: {segs_centroids[:3]}")
+                    
+                    # Debug: print first few branches
+                    for i, branch in enumerate(tree[:min(3, len(tree))]):  # First 3 branches
+                        print(f"[QSM] Branch {i}: type={type(branch)}, length={len(branch) if hasattr(branch, '__len__') else 'N/A'}")
+                        if hasattr(branch, '__iter__'):
+                            branch_list = list(branch)[:5]
+                            print(f"[QSM]   First nodes: {branch_list}")
+                            print(f"[QSM]   Node types: {[type(n) for n in branch_list]}")
+                        
+                except Exception as qsm_error:
+                    print(f"[QSM ERROR] Error during applyQSM call: {qsm_error}")
+                    print(f"[QSM ERROR] Error type: {type(qsm_error).__name__}")
+                    import traceback
+                    print(f"[QSM ERROR] Full traceback:")
+                    traceback.print_exc()
+                    raise
 
-                # Create branch medial structure in CloudCompare
-                pcd_wrapper = pycc.ccHObject(f"{pc.getName()}_branch_medial")
+                # Create branch medial structure (only in CloudCompare mode)
+                if PYCC_AVAILABLE:
+                    print(f"[QSM] Creating branch medial structure in CloudCompare...")
+                    pcd_wrapper = pycc.ccHObject(f"{pc.getName()}_branch_medial")
 
-                for i, branch in enumerate(tree):
-                    branch_medial_pcd = pycc.ccPointCloud(f"{pc.getName()}_branch_medial")
+                    for i, branch in enumerate(tree):
+                        print(f"[QSM] Processing branch {i}/{len(tree)}: type={type(branch)}, length={len(branch) if hasattr(branch, '__len__') else 'N/A'}")
+                        branch_medial_pcd = pycc.ccPointCloud(f"{pc.getName()}_branch_medial")
 
-                    for node in branch:
-                        branch_medial_pcd.addPoint(cccorelib.CCVector3(
-                            segs_centroids[node][0],
-                            segs_centroids[node][1],
-                            segs_centroids[node][2]
-                        ))
+                        for node_idx, node in enumerate(branch):
+                            try:
+                                print(f"[QSM DEBUG] Branch {i}, Node {node_idx}: node={node}, type={type(node)}")
+                                
+                                # Check if segs_centroids is 1D or 2D
+                                if hasattr(segs_centroids, 'ndim'):
+                                    if segs_centroids.ndim == 1:
+                                        print(f"[QSM ERROR] segs_centroids is 1D! Cannot index with [node][0]")
+                                        print(f"[QSM ERROR] segs_centroids shape: {segs_centroids.shape}")
+                                        print(f"[QSM ERROR] Attempting to access node index: {node}")
+                                        raise IndexError(f"segs_centroids is 1D (shape {segs_centroids.shape}), but trying to access 2D index [node][0]")
+                                
+                                if node >= len(segs_centroids):
+                                    print(f"[QSM ERROR] Branch {i}, Node {node_idx}: node index {node} >= segs_centroids length {len(segs_centroids)}")
+                                    print(f"[QSM ERROR] Branch content: {branch}")
+                                    raise IndexError(f"Node index {node} out of range for segs_centroids (length {len(segs_centroids)})")
+                                
+                                print(f"[QSM DEBUG] Accessing segs_centroids[{node}]...")
+                                centroid = segs_centroids[node]
+                                print(f"[QSM DEBUG] Centroid type: {type(centroid)}, value: {centroid}")
+                                
+                                # Check centroid dimensions
+                                if hasattr(centroid, '__len__'):
+                                    print(f"[QSM DEBUG] Centroid length: {len(centroid)}")
+                                    if len(centroid) >= 3:
+                                        branch_medial_pcd.addPoint(cccorelib.CCVector3(
+                                            centroid[0],
+                                            centroid[1],
+                                            centroid[2]
+                                        ))
+                                    else:
+                                        print(f"[QSM ERROR] Centroid has insufficient dimensions: {len(centroid)}")
+                                        raise ValueError(f"Centroid at index {node} has only {len(centroid)} dimensions, expected 3")
+                                else:
+                                    print(f"[QSM ERROR] Centroid is not array-like: {centroid}")
+                                    raise ValueError(f"Centroid at index {node} is not array-like: {type(centroid)}")
+                                    
+                            except Exception as node_error:
+                                print(f"[QSM ERROR] Failed to add node {node_idx} (index {node}): {node_error}")
+                                print(f"[QSM ERROR] Error type: {type(node_error).__name__}")
+                                import traceback
+                                print(f"[QSM ERROR] Traceback:")
+                                traceback.print_exc()
+                                raise
 
-                    branch_polyline = pycc.ccPolyline(branch_medial_pcd)
-                    branch_polyline.setClosed(False)
-                    branch_polyline.addPointIndex(0, branch_medial_pcd.size())
+                        branch_polyline = pycc.ccPolyline(branch_medial_pcd)
+                        branch_polyline.setClosed(False)
+                        branch_polyline.addPointIndex(0, branch_medial_pcd.size())
 
-                    if i == 0:
-                        branch_polyline.setName(f"Stem")
-                    else:
-                        branch_polyline.setName(f"Branch_{i}")
+                        if i == 0:
+                            branch_polyline.setName(f"Stem")
+                        else:
+                            branch_polyline.setName(f"Branch_{i}")
 
-                    pcd_wrapper.addChild(branch_polyline)
-                    CC.addToDB(branch_polyline)
+                        pcd_wrapper.addChild(branch_polyline)
+                        CC.addToDB(branch_polyline)
 
-                CC.addToDB(pcd_wrapper)
+                    CC.addToDB(pcd_wrapper)
+                    print(f"[QSM] Branch medial structure created successfully")
 
                 # Save tree structure to OBJ and XML files
+                print(f"[QSM] Saving tree structure to OBJ and XML...")
                 obj_path = os.path.join(self.log_local_path, f"{pc.getName()}_woodobj.obj")
                 xml_path = os.path.join(self.log_local_path, f"{pc.getName()}_wood.xml")
 
-                applyQSM.saveTreeToObj(tree_centroid_radius, obj_path)
-                applyQSM.saveTreeToXML(tree, tree_centroid_radius, xml_path)
+                try:
+                    applyQSM.saveTreeToObj(tree_centroid_radius, obj_path)
+                    print(f"[QSM] OBJ file saved: {obj_path}")
+                except Exception as obj_error:
+                    print(f"[QSM ERROR] Failed to save OBJ: {obj_error}")
+                    import traceback
+                    traceback.print_exc()
+                    raise
+                
+                try:
+                    applyQSM.saveTreeToXML(tree, tree_centroid_radius, xml_path)
+                    print(f"[QSM] XML file saved: {xml_path}")
+                except Exception as xml_error:
+                    print(f"[QSM ERROR] Failed to save XML: {xml_error}")
+                    import traceback
+                    traceback.print_exc()
+                    raise
 
                 self.progressUpdated.emit(90)
 
                 # Load the OBJ file into CloudCompare
-                params = pycc.FileIOFilter.LoadParameters()
-                params.parentWidget = CC.getMainWindow()
-                obj = CC.loadFile(obj_path, params)
+                if PYCC_AVAILABLE:
+                    params = pycc.FileIOFilter.LoadParameters()
+                    params.parentWidget = CC.getMainWindow()
+                    obj = CC.loadFile(obj_path, params)
 
                 # Update segmentation scalar field
                 segs_field = pc.getScalarFieldIndexByName("segs")
@@ -1524,8 +2442,13 @@ class WebInterface(QObject):
                 pc.showSF(True)
 
                 # Update UI
-                CC.redrawAll()
-                CC.updateUI()
+                if PYCC_AVAILABLE:
+                    CC.redrawAll()
+                    CC.updateUI()
+                else:
+                    # Auto-save in standalone mode
+                    self.saveStandaloneResults(step_name="qsm")
+                    # Note: OBJ and XML files are already saved separately
 
                 self.progressUpdated.emit(100)
                 self.showNotification.emit(f"QSM processing completed for {pc.getName()}", "success")
@@ -1555,6 +2478,68 @@ class WebInterface(QObject):
         print(f"Python received selected model: {model_name}")
         # Store the selected model name for use in other methods
         self.selected_model = model_name
+        return model_name
+
+    @pyqtSlot(result=str)
+    def selectPointCloudFile(self):
+        """Open file dialog to select point cloud file for standalone mode"""
+        from PyQt6.QtWidgets import QFileDialog
+        file_path, _ = QFileDialog.getOpenFileName(
+            None,
+            "Select Point Cloud File",
+            "",
+            "Point Cloud Files (*.ply *.pcd *.las *.laz *.txt *.xyz *.pts);;All Files (*)"
+        )
+        if file_path:
+            self.standalone_file_path = file_path
+            # Clear cached point cloud when new file is selected
+            self.standalone_point_cloud = None
+            self.showNotification.emit(f"Selected file: {os.path.basename(file_path)}", "success")
+            return file_path
+        return ""
+
+    @pyqtSlot(str, result=str)
+    def exportResults(self, format_type="txt"):
+        """Export processing results to file - callable from UI"""
+        result = self.exportStandaloneResults(format_type)
+        if result:
+            return result
+        return ""
+
+    @pyqtSlot(result=str)
+    def saveResults(self):
+        """Save current processing results - callable from UI"""
+        result = self.saveStandaloneResults("manual_save")
+        if result:
+            return result
+        return ""
+
+    @pyqtSlot(result=str)
+    def loadResults(self):
+        """Load previously saved results - callable from UI"""
+        from PyQt6.QtWidgets import QFileDialog
+        file_path, _ = QFileDialog.getOpenFileName(
+            None,
+            "Load Saved Results",
+            self.log_local_path,
+            "Numpy Archive Files (*.npz);;All Files (*)"
+        )
+        if file_path:
+            result = self.loadSavedResults(file_path)
+            if result:
+                return file_path
+        return ""
+
+    @pyqtSlot(str, result='bool')
+    def setStandaloneFile(self, file_path):
+        """Set the standalone file path for HTML file input selections"""
+        if file_path and os.path.exists(file_path):
+            self.standalone_file_path = file_path
+            self.showNotification.emit(f"File ready: {os.path.basename(file_path)}", "success")
+            return True
+        else:
+            self.showNotification.emit("File path is invalid or file does not exist", "error")
+            return False
         return model_name
 
 
@@ -1642,4 +2627,3 @@ if __name__ == "__main__":
     window = TreeAIBoxWeb()
     window.show()
     sys.exit(app.exec())
-
