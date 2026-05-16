@@ -1,8 +1,0 @@
-laspy
-numpy
-scipy
-shapely
-geopandas
-pyqt6
-pyproj
-fiona
