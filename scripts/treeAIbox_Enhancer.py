@@ -15,24 +15,20 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QListWidget, QListWidgetItem, QLineEdit, QLabel, QFileDialog,
     QMessageBox, QProgressBar, QSplitter, QFrame, QComboBox, QCheckBox,
-    QGroupBox, QScrollArea, QTextEdit, QInputDialog, QDialog, QRadioButton, QButtonGroup, QSpinBox
+    QGroupBox, QScrollArea, QTextEdit, QDialog, QButtonGroup, QRadioButton, QSpinBox
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QFont, QPalette, QColor, QIcon, QScreen
+from PyQt6.QtGui import QFont, QPalette, QColor
 from sklearn.cluster import DBSCAN
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
 from datetime import datetime
-import base64
-from PIL import Image
-import io
-import litellm
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial.distance import cdist
 from scipy.spatial import KDTree
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor
 import multiprocessing
 
 
@@ -244,9 +240,9 @@ class PolygonSelectionDialog(QDialog):
         ax.set_title(title)
         ax.grid(True, alpha=0.3)
         
-        # Set aspect ratio to 'auto' to prevent skewing of tree points
-        # This allows the plot to stretch naturally for tree visualization
-        ax.set_aspect('auto')
+        # Set aspect ratio to 'equal' for accurate spatial representation
+        # This ensures points maintain their true spatial relationships without distortion
+        ax.set_aspect('equal', adjustable='datalim')
         
         # Add colorbar with ITC value labels
         cbar = self.figure.colorbar(scatter, ax=ax, shrink=0.8, ticks=[0, 1, 2, 3, 4, 5, 6, 7, 8])
@@ -424,17 +420,7 @@ class TreeVisualizerGUI(QMainWindow):
         self.centroids_kdtree = None  # KDTree for fast spatial queries
         print(f"[INIT] {time.strftime('%H:%M:%S')} - Instance variables set ({time.perf_counter() - init_start:.3f}s)")
         
-        # Initialize VLM Analysis Processor for flagged trees system
-        vlm_start = time.perf_counter()
-        try:
-            from modules.vlm_analysis_processor import VLMAnalysisProcessor
-            self.vlm_processor = VLMAnalysisProcessor()
-            self.current_file_path = None  # Track current loaded file for analysis storage
-            print(f"[INIT] {time.strftime('%H:%M:%S')} - VLMAnalysisProcessor loaded ({time.perf_counter() - vlm_start:.3f}s)")
-        except ImportError:
-            self.vlm_processor = None
-            self.current_file_path = None
-            print("Warning: VLMAnalysisProcessor not available")
+
         
         ui_start = time.perf_counter()
         print(f"[INIT] {time.strftime('%H:%M:%S')} - Starting init_ui...")
@@ -512,7 +498,10 @@ class TreeVisualizerGUI(QMainWindow):
         """Add a message to the console output."""
         from datetime import datetime
         timestamp = datetime.now().strftime("%H:%M:%S")
-        self.console.append(f"[{timestamp}] {message}")
+        formatted_msg = f"[{timestamp}] {message}"
+        self.console.append(formatted_msg)
+        # Also print to terminal for visibility
+        print(formatted_msg)
         # Auto-scroll to bottom
         scrollbar = self.console.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
@@ -918,12 +907,7 @@ class TreeVisualizerGUI(QMainWindow):
 
         viz_layout.addWidget(split_group)
 
-        # Filter option
-        self.dbh_mode_checkbox = QCheckBox("DBH Mode (1.37m trunks only)")
-        self.dbh_mode_checkbox.setChecked(False)
-        self.dbh_mode_checkbox.setStyleSheet("margin-top: 5px; font-weight: bold; color: #4CAF50;")
-        self.dbh_mode_checkbox.setToolTip("When enabled, all visualizations are filtered to show only trunk points within DBH height (0-1.37m)")
-        viz_layout.addWidget(self.dbh_mode_checkbox)
+
 
         self.filter_checkbox = QCheckBox("Filter tree points (treefilter=2)")
         self.filter_checkbox.setChecked(True)
@@ -1004,17 +988,20 @@ class TreeVisualizerGUI(QMainWindow):
         self.load_volume_button.setToolTip("Load volume calculation data from file")
         button_layout.addWidget(self.load_volume_button)
 
+        # Select folder for batch volume saves
+        self.volume_folder_button = ModernButton("Select Volume Folder")
+        self.volume_folder_button.clicked.connect(self.select_volume_folder)
+        self.volume_folder_button.setEnabled(True)
+        self.volume_folder_button.setToolTip("Pre-select folder for batch volume saves (avoids repeated folder selection)")
+        button_layout.addWidget(self.volume_folder_button)
+
         self.clear_volume_button = ModernButton("Clear Volume Results")
         self.clear_volume_button.clicked.connect(self.clear_accumulated_volume)
         self.clear_volume_button.setEnabled(False)
         self.clear_volume_button.setToolTip("Clear all accumulated volume calculation results")
         button_layout.addWidget(self.clear_volume_button)
 
-        self.dbh_button = ModernButton("DBH Trunk View")
-        self.dbh_button.clicked.connect(self.visualize_dbh_trunk)
-        self.dbh_button.setEnabled(False)
-        self.dbh_button.setToolTip("Show trunk points from ground to DBH height (1.37m) with DBH plane")
-        button_layout.addWidget(self.dbh_button)
+
 
         self.crown_polygon_button = ModernButton("Tree Crown Polygon")
         self.crown_polygon_button.clicked.connect(self.create_tree_crown_polygon)
@@ -1022,11 +1009,7 @@ class TreeVisualizerGUI(QMainWindow):
         self.crown_polygon_button.setToolTip("Create 2D polygon from all tree points projected to XY plane")
         button_layout.addWidget(self.crown_polygon_button)
 
-        self.save_polygon_gpkg_button = ModernButton("Save Polygon to GeoPackage")
-        self.save_polygon_gpkg_button.clicked.connect(self.save_polygon_to_geopackage)
-        self.save_polygon_gpkg_button.setEnabled(False)
-        self.save_polygon_gpkg_button.setToolTip("Save current tree crown polygon to GeoPackage file")
-        button_layout.addWidget(self.save_polygon_gpkg_button)
+
 
     # Extract component buttons removed per user request
 
@@ -1047,6 +1030,28 @@ class TreeVisualizerGUI(QMainWindow):
         self.split_button.setEnabled(False)
         button_layout.addWidget(self.split_button)
 
+        # Add Decluster Branches controls
+        decluster_layout = QHBoxLayout()
+        self.slice_height_input = QSpinBox()
+        self.slice_height_input.setMinimum(5)
+        self.slice_height_input.setMaximum(50)
+        self.slice_height_input.setValue(10)
+        self.slice_height_input.setSuffix(" cm")
+        self.slice_height_input.setToolTip("Height of each horizontal slice for branch separation")
+        decluster_layout.addWidget(QLabel("Slice Height:"))
+        decluster_layout.addWidget(self.slice_height_input)
+        self.decluster_button = ModernButton("Decluster Branches")
+        self.decluster_button.clicked.connect(self.visualize_height_slices)
+        self.decluster_button.setEnabled(False)
+        self.decluster_button.setToolTip("Separate trunk into horizontal slices for branch analysis")
+        decluster_layout.addWidget(self.decluster_button)
+        self.detect_branches_button = ModernButton("Detect Branches")
+        self.detect_branches_button.clicked.connect(self.detect_branch_clusters_in_slices)
+        self.detect_branches_button.setEnabled(False)
+        self.detect_branches_button.setToolTip("Run DBSCAN on each slice to detect individual branches")
+        decluster_layout.addWidget(self.detect_branches_button)
+        button_layout.addLayout(decluster_layout)
+
         # Add AI Analysis button
         self.analyze_button = ModernButton("Analyze Tree")
         self.analyze_button.clicked.connect(self.analyze_tree_with_ai)
@@ -1054,11 +1059,12 @@ class TreeVisualizerGUI(QMainWindow):
         self.analyze_button.setToolTip("Use AI to analyze tree structure and segmentation quality")
         button_layout.addWidget(self.analyze_button)
 
-        # Add Flagged Trees button (NEW)
-        self.flagged_trees_button = ModernButton("📊 Flagged Trees")
-        self.flagged_trees_button.clicked.connect(self.show_flagged_trees_dialog)
-        self.flagged_trees_button.setToolTip("View trees flagged with multiple trees/poor segmentation")
-        button_layout.addWidget(self.flagged_trees_button)
+        # Add Batch Analyze button
+        self.batch_analyze_button = ModernButton("Batch Analyze Trunk")
+        self.batch_analyze_button.clicked.connect(self.batch_analyze_trunk_volumes)
+        self.batch_analyze_button.setEnabled(False)
+        self.batch_analyze_button.setToolTip("Analyze all trees in list: visualize trunk → select all points → calculate volume → save")
+        button_layout.addWidget(self.batch_analyze_button)
 
         self.clear_button = ModernButton("Clear View")
         self.clear_button.clicked.connect(self.clear_plot)
@@ -1108,9 +1114,6 @@ class TreeVisualizerGUI(QMainWindow):
         try:
             self.progress_bar.setVisible(True)
             self.progress_bar.setRange(0, 0)  # Indeterminate progress
-            
-            # Track current file path for analysis storage
-            self.current_file_path = file_path
 
             # Load LAS file
             read_start = time.perf_counter()
@@ -1218,7 +1221,7 @@ class TreeVisualizerGUI(QMainWindow):
 
             self.visualize_button.setEnabled(True)
             self.trunk_button.setEnabled(has_stemcls)
-            self.dbh_button.setEnabled(has_stemcls)
+            self.batch_analyze_button.setEnabled(has_stemcls)
             self.crown_polygon_button.setEnabled(True)  # Always enabled since it doesn't require stemcls
             self.view_neighbors_button.setEnabled(True)
             self.draw_polygon_button.setEnabled(True)
@@ -1346,9 +1349,8 @@ class TreeVisualizerGUI(QMainWindow):
 
             # Reset camera and add title
             self.plotter.reset_camera()
-            dbh_note = " (DBH Mode: 0-1.37m trunks only)" if self.dbh_mode_checkbox.isChecked() else ""
             num_points = len(self.current_tree_points)
-            self.plotter.add_text(f"Tree ID: {self.current_tree_id} ({num_points} points){dbh_note} - Color: {color_field}",
+            self.plotter.add_text(f"Tree ID: {self.current_tree_id} ({num_points} points) - Color: {color_field}",
                                  position='upper_left', font_size=12, color='#FFFFFF')
             # Update instruction text
             self.plotter.add_text("Click on points to see ITC values", position='upper_right', 
@@ -1406,16 +1408,6 @@ class TreeVisualizerGUI(QMainWindow):
                     treefilter_values = np.array(self.las_data['treefilter'])
                     mask = mask & (treefilter_values == 2)
 
-                # Apply DBH mode filtering if enabled
-                if self.dbh_mode_checkbox.isChecked():
-                    if 'stemcls' in self.las_data.point_format.dimension_names:
-                        stemcls_values = np.array(self.las_data['stemcls'])
-                        z_values = np.array(self.las_data.z)
-                        mask = mask & (stemcls_values != 1) & (z_values >= 0) & (z_values <= 1.37)
-                    else:
-                        QMessageBox.warning(self, "Warning", "DBH mode requires 'stemcls' field in LAS file.")
-                        return
-
                 if np.any(mask):
                     points = np.column_stack([
                         np.array(self.las_data.x)[mask],
@@ -1434,7 +1426,7 @@ class TreeVisualizerGUI(QMainWindow):
             merged_points = np.vstack(all_points)
             merged_mask = np.concatenate(all_masks)
 
-            print(f"Visualizing {len(selected_tree_ids)} trees with {len(merged_points)} total points{' (DBH Mode)' if self.dbh_mode_checkbox.isChecked() else ''}")
+            print(f"Visualizing {len(selected_tree_ids)} trees with {len(merged_points)} total points")
 
             # Create tree ID mapping for each point in merged_points
             self.current_tree_ids = []
@@ -1580,11 +1572,6 @@ class TreeVisualizerGUI(QMainWindow):
                     treefilter_values = np.array(self.las_data['treefilter'])
                     mask = mask & (treefilter_values == 2)
 
-                # Apply DBH mode filtering if enabled (additional height restriction)
-                if self.dbh_mode_checkbox.isChecked():
-                    z_values = np.array(self.las_data.z)
-                    mask = mask & (z_values >= 0) & (z_values <= 1.37)
-
                 if np.any(mask):
                     points = np.column_stack([
                         np.array(self.las_data.x)[mask],
@@ -1603,7 +1590,7 @@ class TreeVisualizerGUI(QMainWindow):
             merged_points = np.vstack(all_points)
             merged_mask = np.concatenate(all_masks)
 
-            print(f"Visualizing trunks of {len(selected_tree_ids)} trees with {len(merged_points)} total points{' (DBH Mode)' if self.dbh_mode_checkbox.isChecked() else ''}")
+            print(f"Visualizing trunks of {len(selected_tree_ids)} trees with {len(merged_points)} total points")
 
             # Calculate bounding box height and set max height input (use the tallest tree)
             z_coords = merged_points[:, 2]  # Z coordinates
@@ -1635,6 +1622,8 @@ class TreeVisualizerGUI(QMainWindow):
             # Enable split detection button for merged trunks
             self.split_button.setEnabled(True)
             self.analyze_button.setEnabled(True)
+            self.decluster_button.setEnabled(True)
+            self.detect_branches_button.setEnabled(True)
 
             # Enable polygon selection buttons
             self.draw_polygon_button.setEnabled(True)
@@ -1644,119 +1633,7 @@ class TreeVisualizerGUI(QMainWindow):
             print(f"Error in visualize_trunk: {str(e)}")
             QMessageBox.critical(self, "Error", f"Failed to visualize trunks: {str(e)}")
 
-    def visualize_dbh_trunk(self):
-        """Visualize trunk points from ground to DBH height (1.37m) with DBH plane."""
-        if self.las_data is None:
-            print("Error: No LAS file loaded")
-            QMessageBox.warning(self, "Warning", "No LAS file loaded.")
-            return
 
-        if not self.plotter:
-            print("Error: 3D viewer not initialized")
-            QMessageBox.warning(self, "Warning", "3D viewer not initialized.")
-            return
-
-        selected_tree_ids = self.get_selected_tree_ids()
-        if not selected_tree_ids:
-            print("Warning: No tree IDs selected")
-            QMessageBox.warning(self, "Warning", "Please select one or more tree IDs from the list.")
-            return
-
-        try:
-            # Validate selected tree IDs
-            invalid_ids = [tid for tid in selected_tree_ids if tid not in self.unique_itc_values]
-            if invalid_ids:
-                print(f"Warning: Invalid tree IDs selected: {invalid_ids}")
-                QMessageBox.warning(self, "Warning", f"Invalid tree IDs selected: {invalid_ids}")
-                return
-
-        except ValueError as e:
-            print(f"Error validating tree IDs: {str(e)}")
-            QMessageBox.warning(self, "Warning", "Invalid tree IDs selected.")
-            return
-
-        # Check if stemcls field exists
-        if 'stemcls' not in self.las_data.point_format.dimension_names:
-            print("Warning: No 'stemcls' scalar field found")
-            QMessageBox.warning(self, "Warning", "No 'stemcls' scalar field found in the LAS file.")
-            return
-
-        try:
-            # DBH height in meters (standard forestry measurement)
-            dbh_height = 1.37
-
-            # Extract and merge DBH trunk points for all selected trees
-            all_points = []
-            all_masks = []
-            itc_values = np.array(self.las_data['itc'])
-            stemcls_values = np.array(self.las_data['stemcls'])
-            z_values = np.array(self.las_data.z)
-
-            for tree_id in selected_tree_ids:
-                # Filter for trunk points (stemcls != 1) within DBH height range (0 to 1.37m)
-                mask = (itc_values == tree_id) & (stemcls_values != 1) & (z_values >= 0) & (z_values <= dbh_height)
-
-                # Apply treefilter if enabled
-                if self.filter_checkbox.isChecked() and 'treefilter' in self.las_data.point_format.dimension_names:
-                    treefilter_values = np.array(self.las_data['treefilter'])
-                    mask = mask & (treefilter_values == 2)
-
-                if np.any(mask):
-                    points = np.column_stack([
-                        np.array(self.las_data.x)[mask],
-                        np.array(self.las_data.y)[mask],
-                        np.array(self.las_data.z)[mask]
-                    ])
-                    all_points.append(points)
-                    all_masks.append(mask)
-
-            if not all_points:
-                print(f"Warning: No DBH trunk points found for selected tree IDs: {selected_tree_ids}")
-                QMessageBox.warning(self, "Warning", f"No trunk points found within DBH height range (0-{dbh_height}m) for selected tree IDs: {selected_tree_ids}")
-                return
-
-            # Merge all points
-            merged_points = np.vstack(all_points)
-            merged_mask = np.concatenate(all_masks)
-
-            print(f"Visualizing DBH trunks of {len(selected_tree_ids)} trees with {len(merged_points)} total points (0-{dbh_height}m)")
-
-            # Store current tree data for recoloring
-            self.current_tree_points = merged_points
-            self.current_tree_id = f"DBH Trunks ({', '.join(map(str, selected_tree_ids))})"
-            self.current_mask = merged_mask
-            self.all_masks = all_masks
-
-            # For DBH trunk visualization, use default green
-            self.current_color_values = None
-            self.current_color_field = "Default (green)"
-
-            # Collect ITC values for point picking
-            all_itc_values = []
-            for mask in all_masks:
-                itc_vals = np.array(self.las_data['itc'])[mask]
-                all_itc_values.append(itc_vals)
-            self.current_itc_values = np.concatenate(all_itc_values)
-
-            # Switch to default green for DBH trunk visualization
-            self.color_combo.setCurrentText("Default (green)")
-
-            # Visualize with current color field
-            self.update_tree_colors(self.color_combo.currentText())
-
-            # Add DBH plane at 1.37m height
-            self.add_dbh_plane(merged_points, dbh_height)
-
-            # Enable analyze button for tree analysis
-            self.analyze_button.setEnabled(True)
-
-            # Disable split detection for DBH visualization
-            self.split_button.setEnabled(False)
-            # extract button removed; no action needed
-
-        except Exception as e:
-            print(f"Error in visualize_dbh_trunk: {str(e)}")
-            QMessageBox.critical(self, "Error", f"Failed to visualize DBH trunks: {str(e)}")
 
     def create_tree_crown_polygon(self):
         """Create a 2D polygon from all tree points projected to XY plane."""
@@ -1887,14 +1764,8 @@ class TreeVisualizerGUI(QMainWindow):
                 self.current_tree_points = merged_points
                 self.current_tree_id = f"Crown Polygon ({', '.join(map(str, selected_tree_ids))})"
                 self.current_mask = merged_mask
-                self.current_polygon = polygon_mesh  # Store polygon for export
-                
-                # Store hull points for GeoPackage export
                 self.current_hull_points_2d = hull_points_2d
                 self.current_polygon_tree_ids = selected_tree_ids
-                
-                # Enable save button
-                self.save_polygon_gpkg_button.setEnabled(True)
 
                 QMessageBox.information(self, "Success", f"Created crown polygon from {len(merged_points)} points with {len(hull_points_2d)} vertices.")
 
@@ -1906,224 +1777,7 @@ class TreeVisualizerGUI(QMainWindow):
             print(f"Error in create_tree_crown_polygon: {str(e)}")
             QMessageBox.critical(self, "Error", f"Failed to create tree crown polygon: {str(e)}")
 
-    def save_polygon_to_geopackage(self):
-        """Save the current tree crown polygon to a GeoPackage file. Supports appending multiple polygons."""
-        if not hasattr(self, 'current_hull_points_2d') or self.current_hull_points_2d is None:
-            QMessageBox.warning(self, "Warning", "No polygon available. Please create a Tree Crown Polygon first.")
-            return
-        
-        try:
-            import geopandas as gpd
-            from shapely.geometry import Polygon
-        except ImportError:
-            QMessageBox.critical(self, "Error", "GeoPackage export requires 'geopandas' and 'shapely' packages.\nPlease install them: pip install geopandas shapely")
-            return
-        
-        # Check if we have an active GeoPackage file to append to
-        if not hasattr(self, 'active_geopackage_path'):
-            self.active_geopackage_path = None
-        
-        # Ask user whether to create new or append to existing
-        if self.active_geopackage_path and os.path.exists(self.active_geopackage_path):
-            reply = QMessageBox.question(
-                self,
-                "Save Options",
-                f"Active GeoPackage: {os.path.basename(self.active_geopackage_path)}\n\nAppend to this file or create a new one?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel
-            )
-            if reply == QMessageBox.StandardButton.Cancel:
-                return
-            elif reply == QMessageBox.StandardButton.No:
-                # Create new file
-                self.active_geopackage_path = None
-        
-        # Get save file path if no active file
-        if not self.active_geopackage_path:
-            default_name = f"tree_crown_polygons.gpkg"
-            file_path, _ = QFileDialog.getSaveFileName(
-                self, 
-                "Save Polygon to GeoPackage", 
-                default_name,
-                "GeoPackage Files (*.gpkg);;All Files (*)"
-            )
-            
-            if not file_path:
-                return  # User cancelled
-            
-            self.active_geopackage_path = file_path
-        else:
-            file_path = self.active_geopackage_path
-        
-        try:
-            # Create polygon from hull points (close it by adding first point at end)
-            hull_coords = list(self.current_hull_points_2d)
-            hull_coords.append(hull_coords[0])  # Close the polygon
-            
-            polygon = Polygon(hull_coords)
-            
-            # Calculate polygon properties
-            area = polygon.area
-            perimeter = polygon.length
-            centroid = polygon.centroid
-            
-            # Calculate tree height from Z values (since data is normalized, min Z should be ~0)
-            z_values = self.current_tree_points[:, 2]
-            tree_height = np.max(z_values) - np.min(z_values)
-            min_z = np.min(z_values)
-            max_z = np.max(z_values)
-            
-            # Get DBH at 1.3m from volume calculation if available
-            dbh_cm = None
-            if hasattr(self, 'accumulated_volume_sections') and self.accumulated_volume_sections:
-                # Look for DBH data from the current tree(s)
-                for tree_id in self.current_polygon_tree_ids:
-                    for section in self.accumulated_volume_sections:
-                        if str(section.get('tree_id')) == str(tree_id):
-                            circle_data = section.get('circle_data', {})
-                            if circle_data and circle_data.get('dbh_at_1_3m') is not None:
-                                dbh_cm = circle_data['dbh_at_1_3m'] * 100  # Convert m to cm
-                                break
-                    if dbh_cm is not None:
-                        break
-            
-            # Get source file name
-            source_file = 'Unknown'
-            if hasattr(self, 'current_file_path') and self.current_file_path:
-                source_file = os.path.basename(self.current_file_path)
-            
-            # Create new GeoDataFrame for this polygon
-            new_gdf = gpd.GeoDataFrame({
-                'tree_ids': [', '.join(map(str, self.current_polygon_tree_ids))],
-                'num_trees': [len(self.current_polygon_tree_ids)],
-                'num_points': [len(self.current_tree_points)],
-                'num_vertices': [len(self.current_hull_points_2d)],
-                'tree_height_m': [tree_height],
-                'dbh_cm': [dbh_cm],  # DBH at 1.3m in centimeters
-                'min_z': [min_z],
-                'max_z': [max_z],
-                'area_m2': [area],
-                'perimeter_m': [perimeter],
-                'centroid_x': [centroid.x],
-                'centroid_y': [centroid.y],
-                'source_file': [source_file],
-                'created_date': [datetime.now().isoformat()]
-            }, geometry=[polygon])
-            
-            # Try to get CRS from LAS file if available
-            crs = None
-            if self.las_data is not None:
-                try:
-                    # Check for CRS in LAS header
-                    if hasattr(self.las_data.header, 'parse_crs'):
-                        crs = self.las_data.header.parse_crs()
-                    elif hasattr(self.las_data.header, 'vlrs'):
-                        for vlr in self.las_data.header.vlrs:
-                            if vlr.record_id == 2112:  # WKT CRS
-                                crs = vlr.record_data.decode('utf-8').strip('\x00')
-                                break
-                except Exception as crs_error:
-                    print(f"Could not extract CRS from LAS file: {crs_error}")
-            
-            # Check if file exists and has data to append to
-            if os.path.exists(file_path):
-                try:
-                    existing_gdf = gpd.read_file(file_path)
-                    # Use CRS from existing file if available
-                    if existing_gdf.crs:
-                        crs = existing_gdf.crs
-                    
-                    # Set CRS on new data
-                    if crs:
-                        new_gdf.set_crs(crs, inplace=True)
-                    
-                    # Append new polygon to existing data
-                    combined_gdf = gpd.GeoDataFrame(
-                        pd.concat([existing_gdf, new_gdf], ignore_index=True),
-                        crs=crs
-                    )
-                    combined_gdf.to_file(file_path, driver="GPKG")
-                    
-                    polygon_count = len(combined_gdf)
-                    dbh_str = f"{dbh_cm:.1f} cm" if dbh_cm is not None else "N/A (run Volume Calc first)"
-                    self.log_to_console(f"Polygon appended to: {file_path} (Total: {polygon_count} polygons)")
-                    QMessageBox.information(
-                        self, 
-                        "Success", 
-                        f"Polygon appended to GeoPackage:\n{file_path}\n\nTotal polygons: {polygon_count}\nTree Height: {tree_height:.2f} m\nDBH @1.3m: {dbh_str}\nArea: {area:.2f} m²\nPerimeter: {perimeter:.2f} m"
-                    )
-                    return
-                    
-                except Exception as read_error:
-                    print(f"Could not read existing file, creating new: {read_error}")
-            
-            # Set CRS if not already set
-            if crs:
-                new_gdf.set_crs(crs, inplace=True)
-            else:
-                # Ask user if they want to specify CRS (only for new files)
-                reply = QMessageBox.question(
-                    self, 
-                    "CRS Not Found",
-                    "No coordinate reference system (CRS) was found in the LAS file.\n\nWould you like to specify an EPSG code? (e.g., 2960 for NAD83 MTM Zone 8)",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-                )
-                if reply == QMessageBox.StandardButton.Yes:
-                    epsg_code, ok = QInputDialog.getInt(
-                        self, 
-                        "Enter EPSG Code", 
-                        "EPSG Code:", 
-                        2960, 1, 99999
-                    )
-                    if ok:
-                        new_gdf.set_crs(f"EPSG:{epsg_code}", inplace=True)
-            
-            # Save new GeoPackage
-            new_gdf.to_file(file_path, driver="GPKG")
-            
-            dbh_str = f"{dbh_cm:.1f} cm" if dbh_cm is not None else "N/A (run Volume Calc first)"
-            self.log_to_console(f"Polygon saved to: {file_path}")
-            QMessageBox.information(
-                self, 
-                "Success", 
-                f"Polygon saved to GeoPackage:\n{file_path}\n\nTree Height: {tree_height:.2f} m\nDBH @1.3m: {dbh_str}\nArea: {area:.2f} m²\nPerimeter: {perimeter:.2f} m"
-            )
-            
-        except Exception as e:
-            print(f"Error saving polygon to GeoPackage: {str(e)}")
-            QMessageBox.critical(self, "Error", f"Failed to save polygon: {str(e)}")
 
-    def add_dbh_plane(self, trunk_points, dbh_height):
-        """Add a plane at DBH height to show the measurement level."""
-        if not self.plotter or trunk_points is None or len(trunk_points) == 0:
-            return
-
-        try:
-            # Calculate centroid of trunk points for plane positioning
-            center_x = np.mean(trunk_points[:, 0])
-            center_y = np.mean(trunk_points[:, 1])
-
-            # Create a plane at DBH height
-            plane_size = 2.0  # 2m x 2m plane for visibility
-            plane_center = [float(center_x), float(center_y), float(dbh_height)]
-            plane = pv.Plane(center=plane_center, direction=(0, 0, 1),
-                           i_size=plane_size, j_size=plane_size)
-
-            # Add plane to plotter with semi-transparent blue color
-            self.plotter.add_mesh(plane, color='#4444FF', opacity=0.6,
-                                label=f'DBH Plane at {dbh_height}m')
-
-            # Add height label
-            self.plotter.add_point_labels([(center_x + plane_size/2 + 0.1, center_y, dbh_height)],
-                                        [f'DBH: {dbh_height}m'], font_size=12, text_color='white',
-                                        point_color='#4444FF', point_size=8)
-
-            # Update the plot
-            self.plotter.update()
-
-            self.log_to_console(f"Added DBH measurement plane at {dbh_height}m height")
-
-        except Exception as e:
-            self.log_to_console(f"Error adding DBH plane: {str(e)}")
 
     def analyze_splits(self):
         """Analyze split detection on the currently visualized trunk points."""
@@ -3854,6 +3508,8 @@ class TreeVisualizerGUI(QMainWindow):
         
         # Disable buttons when clearing
         self.split_button.setEnabled(False)
+        self.decluster_button.setEnabled(False)
+        self.detect_branches_button.setEnabled(False)
     # extract buttons removed
         self.dbh_circles_button.setEnabled(False)
         self.draw_polygon_button.setEnabled(False)
@@ -3982,20 +3638,7 @@ class TreeVisualizerGUI(QMainWindow):
             # Display results
             self.display_ai_results(ai_result)
             
-            # Process analysis result through VLM Processor (auto-detect and flag multiple trees)
-            if self.vlm_processor and self.current_file_path and self.current_tree_id:
-                try:
-                    self.vlm_processor.process_analysis_result(
-                        tree_id=self.current_tree_id,
-                        file_path=self.current_file_path,
-                        point_count=len(self.current_tree_points) if self.current_tree_points is not None else 0,
-                        analysis_id=analysis_id,
-                        vlm_response=ai_result,
-                        screenshots_dir=analysis_dir
-                    )
-                    self.log_to_console("✓ Analysis result stored in flagged trees database")
-                except Exception as e:
-                    self.log_to_console(f"Warning: Could not process analysis through VLM system: {str(e)}")
+
 
             # Clean up temporary screenshots
             self.cleanup_screenshots(screenshot_paths)
@@ -4003,6 +3646,791 @@ class TreeVisualizerGUI(QMainWindow):
         except Exception as e:
             self.log_to_console(f"Error in AI analysis: {str(e)}")
             QMessageBox.critical(self, "Error", f"AI analysis failed: {str(e)}")
+
+    def batch_analyze_trunk_volumes(self):
+        """
+        Automated batch processing: iterate through all tree IDs with trunk points,
+        visualize trunk → select all points → calculate volume for each.
+        Save folder is requested once at the beginning and reused for all saves.
+        """
+        if self.las_data is None:
+            QMessageBox.warning(self, "Warning", "No LAS file loaded.")
+            return
+
+        # Check if stemcls field exists
+        if 'stemcls' not in self.las_data.point_format.dimension_names:
+            QMessageBox.warning(self, "Warning", "No 'stemcls' scalar field found in the LAS file.")
+            return
+
+        try:
+            import time
+
+            batch_start_perf = time.perf_counter()
+            batch_start_dt = datetime.now()
+            self.log_to_console(f"⏱️ Batch analysis started at {batch_start_dt.strftime('%Y-%m-%d %H:%M:%S')}")
+
+            # Step 1: Prompt user for volume save folder (once at the beginning)
+            folder = QFileDialog.getExistingDirectory(
+                self, "Select Folder to Save Volume Results",
+                ""
+            )
+            if not folder:
+                self.log_to_console("ℹ️ Batch analysis cancelled - no folder selected.")
+                return
+
+            self.volume_folder_path = folder  # Store for reuse during batch
+            self.log_to_console(f"✅ Volume save folder set to: {folder}")
+
+            # Step 2: Get all tree IDs in sorted order (first to last)
+            all_forest_ids = sorted(self.unique_itc_values.tolist())
+            self.log_to_console(f"📋 Found {len(all_forest_ids)} tree IDs in list")
+
+            # Step 3: Filter to only trees that have trunk points (stemcls != 1)
+            itc_values = np.array(self.las_data['itc'])
+            stemcls_values = np.array(self.las_data['stemcls'])
+            
+            valid_tree_ids = []
+            for tree_id in all_forest_ids:
+                mask = (itc_values == tree_id) & (stemcls_values != 1)
+                if np.any(mask):
+                    valid_tree_ids.append(tree_id)
+
+            self.log_to_console(f"🌳 Trees with trunk points: {len(valid_tree_ids)} / {len(all_forest_ids)}")
+
+            if not valid_tree_ids:
+                QMessageBox.warning(self, "Warning", "No trees with trunk points found in the list.")
+                return
+
+            # Step 4: Clear any accumulated volume data to start fresh
+            self.accumulated_volume_sections = []
+            self.log_to_console("🔄 Cleared previous volume results.")
+
+            # Step 5: Loop through each valid tree and process
+            processed_count = 0
+            skipped_trees = []
+            
+            for idx, tree_id in enumerate(valid_tree_ids, 1):
+                self.log_to_console(f"\n\n📍 Processing tree {idx}/{len(valid_tree_ids)}: ID={tree_id}")
+                
+                try:
+                    # Step 5a: Visualize trunk for this single tree
+                    self._visualize_trunk_single_tree(tree_id)
+                    QApplication.processEvents()  # Update UI
+                    
+                    # Step 5b: Select all points in the visualization
+                    self._select_all_points_silent()
+                    QApplication.processEvents()  # Update UI
+                    
+                    # Step 5c: Calculate volume for this selection
+                    self._calculate_volume_silent()
+                    QApplication.processEvents()  # Update UI
+                    
+                    processed_count += 1
+                    self.log_to_console(f"✅ Successfully processed tree {tree_id}")
+                    
+                except Exception as e:
+                    self.log_to_console(f"⚠️ Skipped tree {tree_id}: {str(e)}")
+                    skipped_trees.append((tree_id, str(e)))
+                finally:
+                    elapsed_seconds = max(time.perf_counter() - batch_start_perf, 1e-9)
+                    elapsed_minutes = elapsed_seconds / 60.0
+                    trees_per_min = idx / elapsed_minutes if elapsed_minutes > 0 else 0.0
+                    elapsed_str = time.strftime("%H:%M:%S", time.gmtime(elapsed_seconds))
+                    self.log_to_console(
+                        f"📈 Status: {idx}/{len(valid_tree_ids)} trees | {trees_per_min:.2f} trees/min | elapsed {elapsed_str}"
+                    )
+
+            # Step 6: Save all accumulated volumes once to the pre-selected folder
+            if self.accumulated_volume_sections:
+                self.log_to_console(f"\n\n📊 Saving {len(self.accumulated_volume_sections)} sections to file...")
+                self._save_volume_data_silent()
+            else:
+                self.log_to_console("⚠️ No volume data to save.")
+
+            batch_end_dt = datetime.now()
+            elapsed_seconds = max(time.perf_counter() - batch_start_perf, 1e-9)
+            elapsed_str = time.strftime("%H:%M:%S", time.gmtime(elapsed_seconds))
+            self.log_to_console(
+                f"⏱️ Batch analysis ended at {batch_end_dt.strftime('%Y-%m-%d %H:%M:%S')} | duration {elapsed_str}"
+            )
+
+            # Step 7: Display completion summary
+            self._display_batch_completion_summary(
+                processed_count,
+                len(valid_tree_ids),
+                skipped_trees,
+                batch_start_dt,
+                batch_end_dt,
+                elapsed_seconds,
+            )
+
+        except Exception as e:
+            self.log_to_console(f"❌ Batch analysis error: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Batch analysis failed: {str(e)}")
+
+
+    def _visualize_trunk_single_tree(self, tree_id):
+        """Visualize trunk for a single tree ID in batch mode."""
+        if self.las_data is None:
+            raise RuntimeError("No LAS data available")
+
+        if not self.plotter:
+            raise RuntimeError("3D viewer not initialized")
+
+        # Clear previous visualization
+        self.plotter.clear()
+
+        try:
+            itc_values = np.array(self.las_data['itc'])
+            stemcls_values = np.array(self.las_data['stemcls'])
+            
+            # Get trunk points for this single tree
+            mask = (itc_values == tree_id) & (stemcls_values != 1)
+
+            # Apply treefilter if enabled
+            if self.filter_checkbox.isChecked() and 'treefilter' in self.las_data.point_format.dimension_names:
+                treefilter_values = np.array(self.las_data['treefilter'])
+                mask = mask & (treefilter_values == 2)
+
+            if not np.any(mask):
+                raise ValueError(f"No trunk points for tree {tree_id}")
+
+            points = np.column_stack([
+                np.array(self.las_data.x)[mask],
+                np.array(self.las_data.y)[mask],
+                np.array(self.las_data.z)[mask]
+            ])
+
+            # Store for later use
+            self.current_tree_points = points
+            self.current_tree_id = tree_id
+            self.current_mask = mask
+            self.current_tree_ids = np.full(len(points), tree_id)
+            self.current_color_values = None
+            self.current_color_field = "Default (green)"
+
+            # Visualize with green color
+            self.plotter.add_points(points, color='green', point_size=3, name=f'trunk_tree_{tree_id}')
+            self.plotter.reset_camera()
+
+        except Exception as e:
+            raise RuntimeError(f"Failed to visualize trunk for tree {tree_id}: {str(e)}")
+
+    def _select_all_points_silent(self):
+        """Select all points without UI messages (batch mode)."""
+        if self.current_tree_points is None or len(self.current_tree_points) == 0:
+            raise ValueError("No tree points available for selection")
+
+        self.selected_point_indices = np.arange(len(self.current_tree_points))
+        self.selected_polygon = None
+        self.visualize_selected_points()  # Update visualization with highlighted selection
+
+    def _calculate_volume_silent(self):
+        """Calculate volume without user dialogs (batch mode)."""
+        if self.selected_point_indices is None or len(self.selected_point_indices) == 0:
+            raise ValueError("No points selected for volume calculation")
+
+        if not hasattr(self, 'current_tree_points') or self.current_tree_points is None:
+            raise ValueError("No tree points available")
+
+        volume_groups, is_branch_mode = self._get_volume_groups_from_selection()
+        if not volume_groups:
+            raise ValueError("No valid point groups found for volume calculation")
+        
+        # Determine tree_id
+        if hasattr(self, 'current_tree_ids') and self.current_tree_ids is not None:
+            selected_tree_ids = self.current_tree_ids[self.selected_point_indices]
+            unique_ids, counts = np.unique(selected_tree_ids, return_counts=True)
+            section_tree_id = unique_ids[np.argmax(counts)]
+        else:
+            section_tree_id = self.current_tree_id
+        
+        # Find next section ID
+        existing_section_ids = [int(s['section_id']) for s in self.accumulated_volume_sections 
+                               if s['tree_id'] == section_tree_id and str(s['section_id']).isdigit()]
+        section_id = max(existing_section_ids) + 1 if existing_section_ids else 1
+        
+        # Define colors
+        section_colors = ['cyan', 'magenta', 'yellow', 'lime', 'orange', 'pink', 'purple', 'brown']
+        point_color = section_colors[(section_id - 1) % len(section_colors)]
+        circle_color = section_colors[(section_id - 1) % len(section_colors)]
+        avg_color = 'red'
+
+        if self.plotter is not None:
+            for group_branch_id, _, group_points in volume_groups:
+                point_color = section_colors[(section_id - 1) % len(section_colors)]
+                circle_color = section_colors[(section_id - 1) % len(section_colors)]
+                branch_suffix = f" | B{group_branch_id}" if group_branch_id is not None else ""
+
+                # Add selected points
+                selected_cloud = pv.PolyData(group_points)
+                self.plotter.add_points(
+                    selected_cloud,
+                    color=point_color,
+                    point_size=4,
+                    opacity=0.6,
+                    name=f'volume_section_{section_id}_points',
+                    label=f'Section {section_id}{branch_suffix} Points ({len(group_points)} pts)'
+                )
+
+                # Add circle fitting
+                measurement_label = "Diameter" if is_branch_mode else "DBH"
+                section_data = self._add_dbh_circle_fitting_for_section(
+                    group_points,
+                    section_id,
+                    circle_color,
+                    avg_color,
+                    measurement_label=measurement_label
+                )
+
+                # Calculate volume
+                section_volume = self._calculate_section_volume(section_data)
+
+                # Store section
+                section_info = {
+                    'tree_id': section_tree_id,
+                    'section_id': section_id,
+                    'branch_id': int(group_branch_id) if group_branch_id is not None else None,
+                    'points': group_points.copy(),
+                    'point_color': point_color,
+                    'circle_color': circle_color,
+                    'volume': section_volume,
+                    'circle_data': section_data
+                }
+                self.accumulated_volume_sections.append(section_info)
+
+                if group_branch_id is not None:
+                    self.log_to_console(
+                        f"📏 Calculated volume for tree {section_tree_id}, branch B{group_branch_id}: {section_volume:.4f} m³"
+                    )
+                else:
+                    self.log_to_console(f"📏 Calculated volume for tree {section_tree_id}: {section_volume:.4f} m³")
+
+                section_id += 1
+
+            # Perform global ground proximity check only in non-branch mode
+            if not is_branch_mode:
+                self._check_global_ground_proximity_and_extrapolate()
+            else:
+                self.log_to_console("ℹ️ Branch mode: ground extrapolation disabled")
+
+            self.plotter.update()
+
+    def _save_volume_data_silent(self):
+        """Save volume data without prompts (batch mode - reuses pre-set folder)."""
+        if not self.accumulated_volume_sections:
+            self.log_to_console("⚠️ No volume data to save")
+            return
+
+        if not self.volume_folder_path:
+            raise RuntimeError("Volume folder path not set")
+
+        try:
+            import json
+            
+            # Group sections by tree_id
+            trees_data = {}
+            for section in self.accumulated_volume_sections:
+                section_id = section['section_id']
+                if section_id != "global_extrapolated":
+                    try:
+                        int(section_id)
+                    except (ValueError, TypeError):
+                        continue
+                
+                tree_id = section['tree_id']
+                if tree_id not in trees_data:
+                    trees_data[tree_id] = {
+                        'timestamp': str(pd.Timestamp.now()) if 'pd' in globals() else str(datetime.now()),
+                        'sections': []
+                    }
+                
+                section_data = {
+                    'section_id': section['section_id'],
+                    'branch_id': section.get('branch_id'),
+                    'volume': section['volume'],
+                    'point_color': section['point_color'],
+                    'circle_color': section['circle_color'],
+                    'num_points': len(section['points']),
+                    'circle_data': section['circle_data']
+                }
+                trees_data[tree_id]['sections'].append(section_data)
+
+            # Calculate totals
+            for tree_id, tree_data in trees_data.items():
+                tree_data['total_sections'] = len(tree_data['sections'])
+                tree_data['total_volume'] = sum(s['volume'] for s in tree_data['sections'])
+                tree_data['total_points'] = sum(s['num_points'] for s in tree_data['sections'])
+
+            # Save files
+            saved_count = 0
+            for tree_id, tree_data in trees_data.items():
+                filename = os.path.join(self.volume_folder_path, f"tree_{tree_id}.json")
+                
+                # Check for existing file and merge
+                existing_data = None
+                if os.path.exists(filename):
+                    try:
+                        with open(filename, 'r') as f:
+                            existing_data = json.load(f)
+                    except:
+                        pass
+                
+                if existing_data and 'sections' in existing_data:
+                    existing_data['sections'].extend(tree_data['sections'])
+                    existing_data['total_sections'] = len(existing_data['sections'])
+                    existing_data['total_volume'] = sum(s['volume'] for s in existing_data['sections'])
+                    existing_data['total_points'] = sum(s['num_points'] for s in existing_data['sections'])
+                    save_data = existing_data
+                else:
+                    save_data = tree_data
+                
+                with open(filename, 'w') as f:
+                    json.dump(save_data, f, indent=2)
+                
+                saved_count += 1
+                self.log_to_console(f"💾 Saved tree {tree_id}: {save_data['total_volume']:.4f} m³ → {filename}")
+
+            self.log_to_console(f"✅ All volume data saved to {self.volume_folder_path}")
+
+        except Exception as e:
+            self.log_to_console(f"❌ Error saving volume data: {str(e)}")
+            raise
+
+    def _display_batch_completion_summary(self, processed_count, total_count, skipped_trees, batch_start_dt, batch_end_dt, elapsed_seconds):
+        """Display completion summary in console."""
+        import time
+
+        elapsed_seconds = max(elapsed_seconds, 1e-9)
+        elapsed_minutes = elapsed_seconds / 60.0
+        average_trees_per_min = processed_count / elapsed_minutes if elapsed_minutes > 0 else 0.0
+        elapsed_str = time.strftime("%H:%M:%S", time.gmtime(elapsed_seconds))
+
+        summary = f"\n\n{'='*60}\n📊 BATCH ANALYSIS COMPLETE\n{'='*60}\n"
+        summary += f"Successfully processed: {processed_count}/{total_count} trees\n"
+        summary += f"Skipped: {len(skipped_trees)} trees\n"
+        summary += f"Volume folder: {self.volume_folder_path}\n"
+        summary += f"Start time: {batch_start_dt.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        summary += f"End time: {batch_end_dt.strftime('%Y-%m-%d %H:%M:%S')}\n"
+        summary += f"Elapsed time: {elapsed_str}\n"
+        summary += f"Average throughput: {average_trees_per_min:.2f} trees/min\n"
+        
+        if skipped_trees:
+            summary += f"\nSkipped trees:\n"
+            for tree_id, reason in skipped_trees:
+                summary += f"  - Tree {tree_id}: {reason}\n"
+        
+        if self.accumulated_volume_sections:
+            total_volume = sum(s['volume'] for s in self.accumulated_volume_sections)
+            summary += f"\nTotal volume accumulated: {total_volume:.4f} m³\n"
+        
+        summary += f"{'='*60}\n"
+        self.log_to_console(summary)
+
+    def visualize_height_slices(self):
+        """Visualize trunk divided into horizontal height slices for branch separation."""
+        if self.current_tree_points is None:
+            QMessageBox.warning(self, "Warning", "No trunk visualized. Please visualize a trunk first.")
+            return
+
+        try:
+            # Get slice height in meters (convert from cm via spinner)
+            slice_height_cm = self.slice_height_input.value()
+            slice_height_m = slice_height_cm / 100.0
+            
+            self.log_to_console(f"\n{'='*60}")
+            self.log_to_console(f"📏 Declustering trunk into {slice_height_cm} cm height slices...")
+            self.log_to_console(f"{'='*60}")
+            
+            # Extract Z coordinates
+            z_coords = self.current_tree_points[:, 2]
+            min_z = np.min(z_coords)
+            max_z = np.max(z_coords)
+            trunk_height = max_z - min_z
+            
+            self.log_to_console(f"Trunk height range: {min_z:.2f}m to {max_z:.2f}m ({trunk_height:.2f}m total)")
+            
+            # Calculate slice boundaries
+            slice_boundaries = np.arange(min_z, max_z + slice_height_m, slice_height_m)
+            num_slices = len(slice_boundaries) - 1
+            
+            self.log_to_console(f"Total slices: {num_slices}")
+            
+            # Create color palette for slices
+            # Use a rainbow-like palette with enough distinct colors
+            import matplotlib.cm as cm
+            import warnings
+            
+            # Suppress deprecation warning for get_cmap in matplotlib >= 3.7
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                if num_slices <= 10:
+                    cmap = cm.get_cmap('tab10')
+                elif num_slices <= 20:
+                    cmap = cm.get_cmap('tab20')
+                else:
+                    cmap = cm.get_cmap('hsv')
+            
+            colors = cmap(np.linspace(0, 1, num_slices))
+            
+            # Clear current visualization
+            self.plotter.clear()
+            
+            # Add each slice with unique color
+            for i in range(num_slices):
+                z_start = slice_boundaries[i]
+                z_end = slice_boundaries[i + 1]
+                
+                # Create mask for points in this slice
+                slice_mask = (z_coords >= z_start) & (z_coords < z_end)
+                
+                # For the last slice, include the upper boundary
+                if i == num_slices - 1:
+                    slice_mask = (z_coords >= z_start) & (z_coords <= z_end)
+                
+                slice_points = self.current_tree_points[slice_mask]
+                
+                if len(slice_points) > 0:
+                    # Get color from colormap (already in [0, 1] range)
+                    color = colors[i % len(colors)]
+                    # PyVista accepts [0, 1] range colors directly, convert to native Python list
+                    rgb_color = [float(color[0]), float(color[1]), float(color[2])]
+                    
+                    # Add slice to plotter
+                    self.plotter.add_points(
+                        slice_points,
+                        color=rgb_color,
+                        point_size=5,
+                        name=f'Slice_{i}'
+                    )
+                    
+                    # Log slice info
+                    self.log_to_console(f"  Slice {i}: {z_start:.2f}m - {z_end:.2f}m | {len(slice_points)} points")
+            
+            # Add horizontal plane lines at slice boundaries for reference
+            for i, z_val in enumerate(slice_boundaries):
+                # Get min/max X,Y at this height to draw reference planes
+                points_at_height = self.current_tree_points[
+                    (z_coords >= z_val - 0.01) & (z_coords <= z_val + 0.01)
+                ]
+                if len(points_at_height) > 0:
+                    x_min, x_max = np.min(points_at_height[:, 0]), np.max(points_at_height[:, 0])
+                    y_min, y_max = np.min(points_at_height[:, 1]), np.max(points_at_height[:, 1])
+                    
+                    # Draw a small cross at the slice boundary center
+                    center_x = (x_min + x_max) / 2
+                    center_y = (y_min + y_max) / 2
+                    
+                    # Horizontal line
+                    line_x = np.array([x_min, x_max])
+                    line_y = np.array([center_y, center_y])
+                    line_z = np.array([z_val, z_val])
+                    
+                    self.plotter.add_lines(
+                        np.column_stack([line_x, line_y, line_z]),
+                        color=(128, 128, 128),
+                        width=1,
+                        name=f'boundary_h_{i}'
+                    )
+            
+            # Add legend if supported
+            try:
+                self.plotter.add_legend()
+            except Exception as legend_error:
+                self.log_to_console(f"(Legend display skipped: {str(legend_error)})")
+            
+            # Fit to screen and update
+            self.plotter.reset_camera()
+            self.plotter.update()
+            
+            self.log_to_console(f"✅ Height slice visualization complete!\n")
+            
+        except Exception as e:
+            self.log_to_console(f"❌ Error visualizing height slices: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Failed to visualize height slices:\n{str(e)}")
+
+    def detect_branch_clusters_in_slices(self):
+        """Detect individual branches using DBSCAN on radial coordinates within each height slice."""
+        if self.current_tree_points is None:
+            QMessageBox.warning(self, "Warning", "No trunk visualized. Please visualize a trunk first.")
+            return
+        
+        try:
+            self.log_to_console(f"\n{'='*60}")
+            self.log_to_console(f"🌳 Detecting branches using radial DBSCAN clustering...")
+            self.log_to_console(f"{'='*60}")
+            
+            # Get slice height parameters (same as visualization)
+            slice_height_cm = self.slice_height_input.value()
+            slice_height_m = slice_height_cm / 100.0
+            
+            # Extract coordinates
+            points = self.current_tree_points
+            z_coords = points[:, 2]
+            min_z = np.min(z_coords)
+            max_z = np.max(z_coords)
+            
+            # Calculate slice boundaries
+            slice_boundaries = np.arange(min_z, max_z + slice_height_m, slice_height_m)
+            num_slices = len(slice_boundaries) - 1
+            
+            self.log_to_console(f"📏 Slice height: {slice_height_cm}cm | Total slices: {num_slices}")
+            
+            # Initialize branch assignment array (-1 = noise, >=0 = branch_id)
+            point_to_branch = np.full(len(points), -1, dtype=int)
+            slice_cluster_map = {}  # Maps (slice_idx, local_cluster_id) to global branch_id
+            next_branch_id = 0
+            
+            # Track clusters from previous slice for vertical connectivity
+            prev_slice_clusters = {}  # Maps old_branch_id to centroid
+            
+            self.log_to_console(f"\n🔍 Running DBSCAN on each slice with eps=0.08m, min_samples=3...")
+            
+            # Process each slice
+            for slice_idx in range(num_slices):
+                z_start = slice_boundaries[slice_idx]
+                z_end = slice_boundaries[slice_idx + 1]
+                
+                # Get points in this slice
+                slice_mask = (z_coords >= z_start) & (z_coords < z_end)
+                if slice_idx == num_slices - 1:
+                    slice_mask = (z_coords >= z_start) & (z_coords <= z_end)
+                
+                slice_indices = np.where(slice_mask)[0]
+                slice_points = points[slice_indices]
+                
+                if len(slice_points) < 3:
+                    self.log_to_console(f"  Slice {slice_idx}: < 3 points, skipping")
+                    continue
+                
+                # Calculate center of this slice
+                center_x = np.mean(slice_points[:, 0])
+                center_y = np.mean(slice_points[:, 1])
+                
+                # Get radial coordinates (relative to center)
+                radial_coords = np.column_stack([
+                    slice_points[:, 0] - center_x,
+                    slice_points[:, 1] - center_y
+                ])
+                
+                # Run DBSCAN on radial coordinates
+                dbscan = DBSCAN(eps=0.08, min_samples=3)
+                local_clusters = dbscan.fit_predict(radial_coords)
+                
+                num_clusters = len(set(local_clusters)) - (1 if -1 in local_clusters else 0)
+                num_noise = np.sum(local_clusters == -1)
+                
+                self.log_to_console(f"  Slice {slice_idx}: {num_clusters} clusters, {num_noise} noise points")
+                
+                # Assign branch IDs with vertical tracking
+                current_slice_clusters = {}
+                for local_id in set(local_clusters):
+                    if local_id == -1:  # Skip noise points
+                        continue
+                    
+                    # Get points in this cluster
+                    cluster_mask = local_clusters == local_id
+                    cluster_indices = slice_indices[cluster_mask]
+                    cluster_points = slice_points[cluster_mask]
+                    
+                    # Calculate cluster centroid
+                    centroid = np.mean(cluster_points[:, :2], axis=0)
+                    
+                    # Check if this cluster connects to a cluster from previous slice
+                    branch_id = None
+                    if prev_slice_clusters:
+                        # Find closest cluster in previous slice
+                        min_dist = float('inf')
+                        closest_prev_id = None
+                        for prev_id, prev_centroid in prev_slice_clusters.items():
+                            dist = np.linalg.norm(centroid - prev_centroid)
+                            if dist < min_dist:
+                                min_dist = dist
+                                closest_prev_id = prev_id
+                        
+                        # If close enough (within 0.15m), merge with previous cluster
+                        if closest_prev_id is not None and min_dist < 0.15:
+                            branch_id = closest_prev_id
+                            self.log_to_console(f"    Cluster {local_id}: Merged with branch {branch_id} (dist={min_dist:.3f}m)")
+                    
+                    if branch_id is None:
+                        branch_id = next_branch_id
+                        next_branch_id += 1
+                        self.log_to_console(f"    Cluster {local_id}: New branch {branch_id}")
+                    
+                    # Assign branch ID to points
+                    point_to_branch[cluster_indices] = branch_id
+                    current_slice_clusters[branch_id] = centroid
+                
+                prev_slice_clusters = current_slice_clusters
+            
+            # Store branch assignment
+            self.branch_assignment = point_to_branch
+            
+            self.log_to_console(f"\n✅ Branch detection complete!")
+            self.log_to_console(f"   Total unique branches: {np.max(point_to_branch) + 1}")
+            self.log_to_console(f"   Noise points: {np.sum(point_to_branch == -1)}")
+            
+            # Store branch assignment in memory for visualization and export
+            # (LAS field modification may be handled during save operation)
+            self.log_to_console(f"✅ Branch assignment stored in memory for visualization")
+            
+            # Visualize branches with different colors
+            self.visualize_branches_from_assignment()
+            
+        except Exception as e:
+            self.log_to_console(f"❌ Error detecting branch clusters: {str(e)}")
+            import traceback
+            self.log_to_console(traceback.format_exc())
+            QMessageBox.critical(self, "Error", f"Failed to detect branches:\n{str(e)}")
+
+    def visualize_branches_from_assignment(self):
+        """Visualize the branch assignment using colors from branch_cls."""
+        if not hasattr(self, 'branch_assignment'):
+            self.log_to_console("⚠️ No branch assignment available")
+            return
+        
+        try:
+            self.log_to_console(f"\n🎨 Visualizing branches...")
+            
+            # Clear current visualization
+            self.plotter.clear()
+            
+            # Get unique branch IDs
+            unique_branches = np.unique(self.branch_assignment)
+            unique_branches = unique_branches[unique_branches >= 0]  # Exclude noise (-1)
+            
+            num_branches = len(unique_branches)
+            self.log_to_console(f"   Rendering {num_branches} branches...")
+            
+            # Create color palette for branches
+            import matplotlib.cm as cm
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                if num_branches <= 10:
+                    cmap = cm.get_cmap('tab10')
+                elif num_branches <= 20:
+                    cmap = cm.get_cmap('tab20')
+                else:
+                    cmap = cm.get_cmap('hsv')
+            
+            colors = cmap(np.linspace(0, 1, num_branches))
+            
+            # Calculate branch statistics for console output
+            self.log_to_console(f"\n📋 BRANCH DETAILS:")
+            self.log_to_console(f"{'Branch ID':<12} {'Size':<8} {'Min Z':<8} {'Max Z':<8} {'Height':<8} {'Δ Height':<12}")
+            self.log_to_console(f"-" * 66)
+            
+            branch_info = {}
+            branch_centroids = {}
+            
+            # Add each branch with unique color and information
+            for i, branch_id in enumerate(unique_branches):
+                mask = self.branch_assignment == branch_id
+                branch_points = self.current_tree_points[mask]
+                
+                if len(branch_points) > 0:
+                    # Calculate statistics
+                    size = len(branch_points)
+                    min_z = np.min(branch_points[:, 2])
+                    max_z = np.max(branch_points[:, 2])
+                    height = max_z - min_z
+                    centroid = np.mean(branch_points, axis=0)
+                    
+                    # Store for labeling
+                    branch_info[branch_id] = {
+                        'size': size,
+                        'min_z': min_z,
+                        'max_z': max_z,
+                        'height': height,
+                        'centroid': centroid
+                    }
+                    branch_centroids[branch_id] = centroid
+                    
+                    # Log statistics
+                    self.log_to_console(
+                        f"{branch_id:<12} {size:<8} {min_z:<8.2f} {max_z:<8.2f} "
+                        f"{height:<8.2f} {max_z - min_z:<12.2f}"
+                    )
+                    
+                    # Add points with color
+                    color = colors[i % len(colors)]
+                    rgb_color = [float(color[0]), float(color[1]), float(color[2])]
+                    
+                    self.plotter.add_points(
+                        branch_points,
+                        color=rgb_color,
+                        point_size=5,
+                        name=f'Branch_{branch_id}'
+                    )
+                    
+                    # Add label at branch centroid
+                    try:
+                        self.plotter.add_point_labels(
+                            np.array([centroid]),
+                            [f'B{branch_id}'],
+                            font_size=12,
+                            text_color='white',
+                            name=f'Label_Branch_{branch_id}'
+                        )
+                    except Exception as label_error:
+                        self.log_to_console(f"  (Label for branch {branch_id} skipped: {str(label_error)})")
+            
+            # Add statistics line
+            self.log_to_console(f"-" * 66)
+            
+            # Add noise points in gray if any
+            noise_mask = self.branch_assignment == -1
+            if np.any(noise_mask):
+                noise_points = self.current_tree_points[noise_mask]
+                self.plotter.add_points(
+                    noise_points,
+                    color=[0.5, 0.5, 0.5],
+                    point_size=3,
+                    name='Noise'
+                )
+                self.log_to_console(f"{'Noise':<12} {len(noise_points):<8} (filtered points)")
+            
+            # Summary statistics
+            self.log_to_console(f"\n📊 SUMMARY:")
+            total_classified = np.sum(self.branch_assignment >= 0)
+            total_noise = np.sum(self.branch_assignment == -1)
+            total_points = len(self.branch_assignment)
+            
+            self.log_to_console(f"  Total points classified: {total_classified} ({100*total_classified/total_points:.1f}%)")
+            self.log_to_console(f"  Noise points: {total_noise} ({100*total_noise/total_points:.1f}%)")
+            self.log_to_console(f"  Unique branches: {num_branches}")
+            
+            if branch_info:
+                sizes = [b['size'] for b in branch_info.values()]
+                self.log_to_console(f"  Branch size range: {min(sizes)}-{max(sizes)} points")
+                self.log_to_console(f"  Average branch size: {np.mean(sizes):.1f} points")
+            
+            # Update and display
+            self.plotter.reset_camera()
+            self.plotter.update()
+            
+            self.log_to_console(f"\n✅ Branch visualization complete!")
+            self.log_to_console(f"   (Branch labels shown as 'B#' in 3D view)\n")
+            
+        except Exception as e:
+            self.log_to_console(f"❌ Error visualizing branches: {str(e)}")
+            import traceback
+            self.log_to_console(traceback.format_exc())
+
+    def select_volume_folder(self):
+        """Allow user to pre-select a folder for batch volume saving."""
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select Folder for Volume Saves",
+            ""
+        )
+        if folder:
+            self.volume_folder_path = folder
+            self.log_to_console(f"📁 Volume folder selected: {folder}")
+            QMessageBox.information(self, "Success", f"Volume folder set to:\n{folder}")
+        else:
+            self.log_to_console("ℹ️ No folder selected")
 
     def take_tree_screenshots(self):
         """Take screenshots of the tree from 4 different views."""
@@ -4396,165 +4824,9 @@ Important:
 
         result_dialog.exec()
 
-    def show_flagged_trees_dialog(self):
-        """Display dialog showing trees flagged with multiple trees/segmentation issues."""
-        try:
-            from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, 
-                                         QTableWidgetItem, QPushButton, QLabel, QMessageBox)
-            from PyQt6.QtCore import Qt
-            from PyQt6.QtGui import QColor
-            
-            # Create dialog
-            dialog = QDialog(self)
-            dialog.setWindowTitle("Flagged Trees - Segmentation Quality Issues")
-            dialog.setGeometry(100, 100, 1400, 600)
-            layout = QVBoxLayout()
-            
-            # Title label
-            title_label = QLabel("Trees Flagged for Re-segmentation")
-            title_font = title_label.font()
-            title_font.setPointSize(12)
-            title_font.setBold(True)
-            title_label.setFont(title_font)
-            layout.addWidget(title_label)
-            
-            # Get flagged trees from processor
-            if not self.vlm_processor:
-                no_proc_label = QLabel("VLM Analysis Processor not available.")
-                layout.addWidget(no_proc_label)
-                dialog.setLayout(layout)
-                dialog.exec()
-                return
-            
-            flagged_trees = self.vlm_processor.get_trees_needing_resegmentation()
-            
-            if not flagged_trees:
-                no_data_label = QLabel("No flagged trees found.")
-                layout.addWidget(no_data_label)
-            else:
-                # Create table widget
-                table = QTableWidget()
-                table.setColumnCount(8)
-                table.setHorizontalHeaderLabels([
-                    "Tree ID", "File Path", "Points", "Issue Type",
-                    "Severity", "Crowns", "Detection Date", "Reseg Attempts"
-                ])
-                table.setRowCount(len(flagged_trees))
-                
-                # Color mapping for severity
-                severity_colors = {
-                    "high": QColor(255, 100, 100),      # Red
-                    "medium": QColor(255, 200, 100),    # Orange
-                    "low": QColor(255, 255, 150)        # Yellow
-                }
-                
-                # Populate table
-                for row, tree_dict in enumerate(flagged_trees):
-                    # Tree ID
-                    tree_id_item = QTableWidgetItem(str(tree_dict.get('tree_id', '')))
-                    table.setItem(row, 0, tree_id_item)
-                    
-                    # File path (make it shorter for display)
-                    file_path = tree_dict.get('file_path', '')
-                    display_path = file_path.split("\\")[-1] if "\\" in file_path else file_path.split("/")[-1]
-                    file_item = QTableWidgetItem(display_path)
-                    file_item.setToolTip(file_path)  # Show full path on hover
-                    table.setItem(row, 1, file_item)
-                    
-                    # Points
-                    points_item = QTableWidgetItem(str(tree_dict.get('point_count', 0)))
-                    table.setItem(row, 2, points_item)
-                    
-                    # Issue type
-                    issue_type_item = QTableWidgetItem(str(tree_dict.get('issue_type', '')))
-                    table.setItem(row, 3, issue_type_item)
-                    
-                    # Severity with color
-                    severity = tree_dict.get('severity', 'low').lower()
-                    severity_item = QTableWidgetItem(severity.upper())
-                    if severity in severity_colors:
-                        severity_item.setBackground(severity_colors[severity])
-                    table.setItem(row, 4, severity_item)
-                    
-                    # Crowns detected
-                    crowns = str(tree_dict.get('num_distinct_crowns', '?'))
-                    crowns_item = QTableWidgetItem(crowns)
-                    table.setItem(row, 5, crowns_item)
-                    
-                    # Detection date
-                    detected_on = str(tree_dict.get('detected_on', ''))
-                    # Extract just the date part if it includes time
-                    if ' ' in detected_on:
-                        detected_on = detected_on.split(' ')[0]
-                    date_item = QTableWidgetItem(detected_on)
-                    table.setItem(row, 6, date_item)
-                    
-                    # Resegmentation attempts
-                    attempts = str(tree_dict.get('resegmentation_attempts', 0))
-                    attempts_item = QTableWidgetItem(attempts)
-                    table.setItem(row, 7, attempts_item)
-                
-                # Set column widths
-                table.resizeColumnsToContents()
-                table.setColumnWidth(1, 250)  # Wider for file path
-                table.setColumnWidth(6, 150)  # Date column
-                
-                layout.addWidget(table)
-            
-            # Button layout
-            button_layout = QHBoxLayout()
-            
-            # Export button
-            export_button = QPushButton("📥 Export to JSON")
-            export_button.clicked.connect(lambda: self._export_flagged_trees_dialog())
-            button_layout.addWidget(export_button)
-            
-            # Refresh button
-            refresh_button = QPushButton("🔄 Refresh")
-            refresh_button.clicked.connect(lambda: self.show_flagged_trees_dialog())
-            button_layout.addWidget(refresh_button)
-            
-            # Close button
-            close_button = QPushButton("Close")
-            close_button.clicked.connect(dialog.accept)
-            button_layout.addWidget(close_button)
-            
-            layout.addLayout(button_layout)
-            
-            # Set dialog layout
-            dialog.setLayout(layout)
-            
-            # Show dialog
-            dialog.exec()
-            
-        except Exception as e:
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.critical(self, "Error", f"Error displaying flagged trees:\n{str(e)}")
 
-    def _export_flagged_trees_dialog(self):
-        """Export flagged trees to JSON file."""
-        try:
-            from PyQt6.QtWidgets import QFileDialog, QMessageBox
-            import json
-            
-            if not self.vlm_processor:
-                QMessageBox.warning(self, "Error", "VLM Analysis Processor not available")
-                return
-            
-            file_path, _ = QFileDialog.getSaveFileName(
-                self, "Export Flagged Trees", "", "JSON Files (*.json)"
-            )
-            
-            if file_path:
-                flagged_trees = self.vlm_processor.get_trees_needing_resegmentation()
-                
-                with open(file_path, 'w') as f:
-                    json.dump(flagged_trees, f, indent=2, default=str)
-                
-                QMessageBox.information(self, "Success", f"Exported {len(flagged_trees)} flagged trees to:\n{file_path}")
-        except Exception as e:
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.critical(self, "Error", f"Error exporting flagged trees:\n{str(e)}")
+
+
 
     def cleanup_screenshots(self, screenshot_paths):
         """Clean up temporary screenshot files."""
@@ -4857,8 +5129,8 @@ Important:
             self.log_to_console(f"❌ Error in DBH circles only visualization: {str(e)}")
             print(f"Error in _visualize_dbh_circles_only: {e}")
 
-    def _add_dbh_circle_fitting_for_section(self, dbh_points, section_id, circle_color, avg_color):
-        """Add circle fitting visualization for DBH points with section-specific naming and colors."""
+    def _add_dbh_circle_fitting_for_section(self, dbh_points, section_id, circle_color, avg_color, measurement_label="DBH"):
+        """Add circle fitting visualization for section points with section-specific naming and colors."""
         if len(dbh_points) == 0:
             return {'circles': [], 'avg_radius': 0.0, 'height_range': 0.0}
 
@@ -4943,7 +5215,7 @@ Important:
             # Add average circle at EVERY height level where individual circles exist
             self._add_average_dbh_circles_for_section(circle_centers, final_center, final_radius, section_id, avg_color)
 
-            self.log_to_console(f"📊 Added section {section_id} with {len(circle_centers)} DBH circles")
+            self.log_to_console(f"📊 Added section {section_id} with {len(circle_centers)} {measurement_label} circles")
 
             # Extract DBH at 1.3m from min_z using the AVERAGE radius (same as red circles)
             dbh_at_1_3m = None
@@ -4961,7 +5233,7 @@ Important:
                 dbh_center_at_1_3m = np.array([final_center[0], final_center[1], min_z + target_height])
                 dbh_z_at_1_3m = min_z + target_height
                 
-                self.log_to_console(f"🌳 DBH at 1.3m from min_z: {dbh_at_1_3m*100:.1f} cm (avg radius: {avg_radius_at_1_3m*100:.1f} cm)")
+                self.log_to_console(f"🌳 {measurement_label} at 1.3m from min_z: {dbh_at_1_3m*100:.1f} cm (avg radius: {avg_radius_at_1_3m*100:.1f} cm)")
                 
                 # Visualize DBH circle at 1.3m with green color
                 dbh_circle = pv.Circle(radius=float(avg_radius_at_1_3m), resolution=64)
@@ -4969,7 +5241,7 @@ Important:
                 self.plotter.add_mesh(dbh_circle, color='green', opacity=0.8, line_width=3,
                                     style='wireframe',
                                     name=f'dbh_1_3m_circle_section_{section_id}',
-                                    label=f'Section {section_id} DBH @1.3m: {dbh_at_1_3m*100:.1f}cm')
+                                    label=f'Section {section_id} {measurement_label} @1.3m: {dbh_at_1_3m*100:.1f}cm')
                 
                 # Add a horizontal plane at 1.3m to indicate DBH measurement level
                 plane_size = float(avg_radius_at_1_3m * 2.5)  # Slightly larger than diameter
@@ -4977,15 +5249,15 @@ Important:
                                     direction=[0, 0, 1], i_size=plane_size, j_size=plane_size)
                 self.plotter.add_mesh(dbh_plane, color='green', opacity=0.2,
                                     name=f'dbh_1_3m_plane_section_{section_id}',
-                                    label=f'Section {section_id} DBH Plane @1.3m')
+                                    label=f'Section {section_id} {measurement_label} Plane @1.3m')
                 
                 # Add text label for DBH
                 dbh_label_pos = [float(dbh_center_at_1_3m[0] + plane_size/2), float(dbh_center_at_1_3m[1]), float(dbh_z_at_1_3m)]
-                self.plotter.add_point_labels([dbh_label_pos], [f'DBH: {dbh_at_1_3m*100:.1f}cm'],
+                self.plotter.add_point_labels([dbh_label_pos], [f'{measurement_label}: {dbh_at_1_3m*100:.1f}cm'],
                                              font_size=12, text_color='green', point_size=0,
                                              name=f'dbh_1_3m_label_section_{section_id}')
             else:
-                self.log_to_console(f"⚠️ Section height range ({height_range:.2f}m) doesn't reach 1.3m for DBH measurement")
+                self.log_to_console(f"⚠️ Section height range ({height_range:.2f}m) doesn't reach 1.3m for {measurement_label} measurement")
 
             # Return circle data for volume calculation
             return {
@@ -5419,8 +5691,10 @@ Important:
             return
 
         try:
-            # Get selected points
-            selected_points = self.current_tree_points[self.selected_point_indices]
+            volume_groups, is_branch_mode = self._get_volume_groups_from_selection()
+            if not volume_groups:
+                QMessageBox.warning(self, "No Valid Groups", "No valid point groups found for volume calculation.")
+                return
             
             # Determine tree_id for this section based on selected points
             if hasattr(self, 'current_tree_ids') and self.current_tree_ids is not None:
@@ -5438,14 +5712,17 @@ Important:
             
             # Find the maximum section_id for this tree to ensure proper numbering
             existing_section_ids = [int(s['section_id']) for s in self.accumulated_volume_sections if s['tree_id'] == section_tree_id and str(s['section_id']).isdigit()]
-            if existing_section_ids:
-                section_id = max(existing_section_ids) + 1
+            section_id = max(existing_section_ids) + 1 if existing_section_ids else 1
+
+            total_selected_points = sum(len(group_points) for _, _, group_points in volume_groups)
+            if is_branch_mode:
+                self.log_to_console(
+                    f"📏 Branch-wise volume mode: {len(volume_groups)} branches, {total_selected_points} selected points (tree {section_tree_id})"
+                )
             else:
-                section_id = 1
-            
-            self.log_to_console(f"📏 Performing circle fitting on section {section_id}: {len(selected_points)} selected points (tree {section_tree_id})")
-            
-            self.log_to_console(f"📏 Performing circle fitting on section {section_id}: {len(selected_points)} selected points (tree {section_tree_id})")
+                self.log_to_console(
+                    f"📏 Standard volume mode: section {section_id}, {total_selected_points} selected points (tree {section_tree_id})"
+                )
 
             # Debug: Log accumulated sections count
             self.log_to_console(f"🔍 Current accumulated sections before adding: {len(self.accumulated_volume_sections)}")
@@ -5456,36 +5733,99 @@ Important:
             circle_color = section_colors[(section_id - 1) % len(section_colors)]
             avg_color = 'red'  # Keep average circles red for consistency
 
+            last_section_id = None
+            last_section_points = 0
+            last_section_volume = 0.0
+            last_section_data = None
+            section_metric_values_cm = []
+
             if self.plotter is not None:
                 # NEVER clear the plotter - overlay volume results on existing tree visualization
                 # This preserves the tree visualization while adding volume analysis
 
-                # Show selected points for this section
-                selected_cloud = pv.PolyData(selected_points)
-                self.plotter.add_points(selected_cloud, color=point_color, point_size=4, opacity=0.6,
-                                      name=f'volume_section_{section_id}_points', 
-                                      label=f'Section {section_id} Points ({len(selected_points)} pts)')
+                for group_branch_id, _, group_points in volume_groups:
+                    point_color = section_colors[(section_id - 1) % len(section_colors)]
+                    circle_color = section_colors[(section_id - 1) % len(section_colors)]
+                    branch_suffix = f" | B{group_branch_id}" if group_branch_id is not None else ""
 
-                # Add circle fitting to selected points with section-specific naming
-                section_data = self._add_dbh_circle_fitting_for_section(selected_points, section_id, circle_color, avg_color)
+                    # Show selected points for this section
+                    selected_cloud = pv.PolyData(group_points)
+                    self.plotter.add_points(
+                        selected_cloud,
+                        color=point_color,
+                        point_size=4,
+                        opacity=0.6,
+                        name=f'volume_section_{section_id}_points',
+                        label=f'Section {section_id}{branch_suffix} Points ({len(group_points)} pts)'
+                    )
 
-                # Calculate volume for this section
-                section_volume = self._calculate_section_volume(section_data)
+                    # Add circle fitting to selected points with section-specific naming
+                    measurement_label = "Diameter" if is_branch_mode else "DBH"
+                    section_data = self._add_dbh_circle_fitting_for_section(
+                        group_points,
+                        section_id,
+                        circle_color,
+                        avg_color,
+                        measurement_label=measurement_label
+                    )
 
-                # Store this section's data including volume
-                section_info = {
-                    'tree_id': section_tree_id,
-                    'section_id': section_id,
-                    'points': selected_points.copy(),
-                    'point_color': point_color,
-                    'circle_color': circle_color,
-                    'volume': section_volume,
-                    'circle_data': section_data
-                }
-                self.accumulated_volume_sections.append(section_info)
+                    # Calculate volume for this section
+                    section_volume = self._calculate_section_volume(section_data)
 
-                # Perform global ground proximity check across all accumulated sections
-                self._check_global_ground_proximity_and_extrapolate()
+                    # Store this section's data including volume
+                    section_info = {
+                        'tree_id': section_tree_id,
+                        'section_id': section_id,
+                        'branch_id': int(group_branch_id) if group_branch_id is not None else None,
+                        'points': group_points.copy(),
+                        'point_color': point_color,
+                        'circle_color': circle_color,
+                        'volume': section_volume,
+                        'circle_data': section_data
+                    }
+                    self.accumulated_volume_sections.append(section_info)
+
+                    last_section_id = section_id
+                    last_section_points = len(group_points)
+                    last_section_volume = section_volume
+                    last_section_data = section_data
+
+                    if group_branch_id is not None:
+                        self.log_to_console(
+                            f"📏 Section {section_id} (Branch B{group_branch_id}): {len(group_points)} pts, {section_volume:.4f} m³"
+                        )
+                    else:
+                        self.log_to_console(
+                            f"📏 Section {section_id}: {len(group_points)} pts, {section_volume:.4f} m³"
+                        )
+
+                    if is_branch_mode:
+                        avg_radius = section_data.get('avg_radius') if section_data else None
+                        diameter_cm = (avg_radius * 2 * 100) if avg_radius else None
+                        if diameter_cm is not None:
+                            section_metric_values_cm.append(diameter_cm)
+                        branch_label = f"B{group_branch_id}" if group_branch_id is not None else "N/A"
+                        metric_text = f"{diameter_cm:.1f} cm" if diameter_cm is not None else "N/A"
+                        self.log_to_console(
+                            f"   ↳ Diameter (section avg) | Section {section_id} | Branch {branch_label}: {metric_text}"
+                        )
+                    else:
+                        dbh_at_1_3m = section_data.get('dbh_at_1_3m') if section_data else None
+                        dbh_cm = (dbh_at_1_3m * 100) if dbh_at_1_3m else None
+                        if dbh_cm is not None:
+                            section_metric_values_cm.append(dbh_cm)
+                        metric_text = f"{dbh_cm:.1f} cm" if dbh_cm is not None else "N/A"
+                        self.log_to_console(
+                            f"   ↳ DBH @1.3m | Section {section_id}: {metric_text}"
+                        )
+
+                    section_id += 1
+
+                # Perform global ground proximity check only in non-branch mode
+                if not is_branch_mode:
+                    self._check_global_ground_proximity_and_extrapolate()
+                else:
+                    self.log_to_console("ℹ️ Branch mode: ground extrapolation disabled")
 
                 # Debug: Log accumulated sections count after adding
                 self.log_to_console(f"✅ Total accumulated sections now: {len(self.accumulated_volume_sections)}")
@@ -5495,16 +5835,33 @@ Important:
                 total_points = sum(len(section['points']) for section in self.accumulated_volume_sections)
                 total_volume = sum(section['volume'] for section in self.accumulated_volume_sections)
 
-                # Get DBH at 1.3m from current section if available
-                dbh_at_1_3m = section_data.get('dbh_at_1_3m')
-                dbh_text = f"\nDBH @1.3m: {dbh_at_1_3m*100:.1f} cm" if dbh_at_1_3m else "\nDBH @1.3m: N/A"
+                # Show measurement text based on mode
+                if is_branch_mode:
+                    avg_radius = last_section_data.get('avg_radius') if last_section_data else None
+                    diameter_cm = (avg_radius * 2 * 100) if avg_radius else None
+                    dbh_text = f"\nLast Diameter (section avg): {diameter_cm:.1f} cm" if diameter_cm else "\nLast Diameter (section avg): N/A"
+                else:
+                    dbh_at_1_3m = last_section_data.get('dbh_at_1_3m') if last_section_data else None
+                    dbh_text = f"\nLast DBH @1.3m: {dbh_at_1_3m*100:.1f} cm" if dbh_at_1_3m else "\nLast DBH @1.3m: N/A"
+
+                metric_summary_text = ""
+                if section_metric_values_cm:
+                    metric_name = "Diameter (all sections)" if is_branch_mode else "DBH @1.3m (all sections)"
+                    metric_summary_text = (
+                        f"\n{metric_name}: min {np.min(section_metric_values_cm):.1f}, "
+                        f"max {np.max(section_metric_values_cm):.1f}, avg {np.mean(section_metric_values_cm):.1f} cm"
+                    )
+
+                mode_text = "Mode: Branch-wise" if is_branch_mode else "Mode: Standard"
 
                 info_text = (f"Accumulated Volume Calculation\n"
+                            f"{mode_text}\n"
                             f"Sections: {total_sections}\n"
                             f"Total Points: {total_points}\n"
                             f"Total Volume: {total_volume:.4f} m³"
+                            f"{metric_summary_text}"
                             f"{dbh_text}\n"
-                            f"Last Section: {section_id} ({len(selected_points)} pts, {section_volume:.4f} m³)")
+                            f"Last Section: {last_section_id} ({last_section_points} pts, {last_section_volume:.4f} m³)")
 
                 # Remove previous info text if it exists
                 try:
@@ -5526,6 +5883,43 @@ Important:
         except Exception as e:
             QMessageBox.warning(self, "Volume Calculation Error", f"Error performing volume calculation: {str(e)}")
             print(f"Volume calculation error: {e}")
+
+    def _get_volume_groups_from_selection(self):
+        """Return grouped points for volume calculation as (branch_id, indices, points)."""
+        selected_indices = np.asarray(self.selected_point_indices)
+        selected_points = self.current_tree_points[selected_indices]
+
+        # Default behavior: all selected points as one section
+        default_group = [(None, selected_indices, selected_points)]
+
+        if not hasattr(self, 'branch_assignment') or self.branch_assignment is None:
+            return default_group, False
+
+        if len(self.branch_assignment) != len(self.current_tree_points):
+            self.log_to_console("⚠️ Branch assignment size mismatch with current tree points. Falling back to standard volume mode.")
+            return default_group, False
+
+        selected_branch_ids = self.branch_assignment[selected_indices]
+        unique_branch_ids = sorted(int(branch_id) for branch_id in np.unique(selected_branch_ids) if int(branch_id) >= 0)
+
+        if not unique_branch_ids:
+            self.log_to_console("⚠️ No valid branch IDs in current selection. Falling back to standard volume mode.")
+            return default_group, False
+
+        grouped = []
+        for branch_id in unique_branch_ids:
+            branch_mask = selected_branch_ids == branch_id
+            branch_indices = selected_indices[branch_mask]
+            if len(branch_indices) < 3:
+                continue
+            branch_points = self.current_tree_points[branch_indices]
+            grouped.append((branch_id, branch_indices, branch_points))
+
+        if not grouped:
+            self.log_to_console("⚠️ Branch groups were too small for fitting. Falling back to standard volume mode.")
+            return default_group, False
+
+        return grouped, True
 
     def clear_accumulated_volume(self):
         """
@@ -5609,6 +6003,7 @@ Important:
                 
                 section_data = {
                     'section_id': section['section_id'],
+                    'branch_id': section.get('branch_id'),
                     'volume': section['volume'],
                     'point_color': section['point_color'],
                     'circle_color': section['circle_color'],
@@ -5711,42 +6106,14 @@ Important:
             import os
             import glob
 
-            # Get currently visualized tree IDs instead of all trees in LAS file
-            visualized_tree_ids = self.get_visualized_tree_ids()
-            if not visualized_tree_ids:
-                QMessageBox.warning(self, "No Trees Visualized", "No trees are currently visualized. Please visualize trees first before loading volume data.")
-                return
-
-            self.log_to_console(f"🔍 DEBUG: Currently visualized tree IDs: {sorted(visualized_tree_ids)}")
-
             # Find all tree_*.json files in the folder
-            tree_files = glob.glob(os.path.join(folder, "tree_*.json"))
+            tree_files = sorted(glob.glob(os.path.join(folder, "tree_*.json")))
             
             if not tree_files:
                 QMessageBox.warning(self, "No Tree Files", f"No tree_*.json files found in {folder}")
                 return
 
-            # Filter to only load volume data for currently visualized trees
-            filtered_tree_files = []
-            trees_to_load = []
-            for tree_file in tree_files:
-                filename = os.path.basename(tree_file)
-                tree_id = filename.replace('tree_', '').replace('.json', '')
-                if tree_id in visualized_tree_ids:
-                    filtered_tree_files.append(tree_file)
-                    trees_to_load.append(tree_id)
-            
-            tree_files = filtered_tree_files
-            self.log_to_console(f"📂 Filtered to {len(tree_files)} tree files for visualized trees: {sorted(visualized_tree_ids)}")
-            self.log_to_console(f"📂 Will load volume data for tree IDs: {sorted(trees_to_load)}")
-            
-            if not tree_files:
-                QMessageBox.warning(self, "No Matching Tree Files", f"No tree_*.json files found for currently visualized trees in {folder}")
-                return
-
-            if not tree_files:
-                QMessageBox.warning(self, "No Matching Tree Files", f"No tree_*.json files found for currently active trees in {folder}")
-                return
+            self.log_to_console(f"📂 Found {len(tree_files)} tree files in selected folder. Loading all files...")
 
             # Clear existing volume data if any
             if self.accumulated_volume_sections:
@@ -5791,6 +6158,7 @@ Important:
                             section_info = {
                                 'tree_id': tree_id,
                                 'section_id': section_id,
+                                'branch_id': section_data.get('branch_id'),
                                 'volume': section_data['volume'],
                                 'point_color': section_data['point_color'],
                                 'circle_color': section_data['circle_color'],
@@ -6816,13 +7184,83 @@ def visualize_components(components: dict, plotter, branching_height: float, cen
         print(f"Visualization mode '{viz_mode}' not implemented. Use 'components' for component visualization.")
 
 
+def setup_exception_handler():
+    """Set up global exception handler to capture unhandled errors including PyQt exceptions."""
+    import traceback
+    import logging
+    
+    # Configure logging to file for debugging
+    log_dir = os.path.join(os.path.dirname(__file__), 'error_logs')
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, f'errors_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log')
+    
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler()
+        ]
+    )
+    
+    def handle_exception(exc_type, exc_value, exc_traceback):
+        """Global exception handler for uncaught exceptions."""
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+        
+        error_msg = ''.join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+        logging.error(f"Uncaught exception:\n{error_msg}")
+        print(f"\n{'='*60}\n❌ UNCAUGHT ERROR:\n{error_msg}\n{'='*60}\n", file=sys.stderr)
+    
+    sys.excepthook = handle_exception
+
+
+class ErrorCapturingQApplication(QApplication):
+    """Custom QApplication that captures and logs exceptions from the event loop."""
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.exception_logged = False
+    
+    def notify(self, receiver, event):
+        """Override notify to catch exceptions in PyQt slots and event handlers."""
+        try:
+            return super().notify(receiver, event)
+        except Exception as e:
+            error_msg = f"""
+{'='*60}
+❌ PyQt EVENT LOOP ERROR:
+Exception in {receiver.__class__.__name__}.{event.__class__.__name__}
+{'='*60}
+{traceback.format_exc()}
+{'='*60}
+"""
+            print(error_msg, file=sys.stderr)
+            logging.error(f"PyQt event loop exception: {error_msg}")
+            
+            # Also show a GUI message box if possible
+            try:
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.critical(None, "Error", f"An error occurred:\n\n{str(e)}\n\nCheck error logs for details.")
+            except:
+                pass
+            
+            return False
+
+
 def main():
     """Main application entry point."""
     import time
+    
+    # Set up error handling before creating GUI
+    setup_exception_handler()
+    
     startup_start = time.perf_counter()
     print(f"[STARTUP] {time.strftime('%H:%M:%S')} - Starting application...")
     
-    app = QApplication(sys.argv)
+    # Use custom QApplication that captures PyQt exceptions
+    app = ErrorCapturingQApplication(sys.argv)
     print(f"[STARTUP] {time.strftime('%H:%M:%S')} - QApplication created ({time.perf_counter() - startup_start:.2f}s)")
 
     # Set application properties

@@ -97,49 +97,26 @@ def merge_patches(columns_min,min_res,nbmat_sz,patches, sp_mins):
     return img
 
 def treeLoc(config_file, pcd, model_path, use_cuda=True,if_stem=False,cutoff_thresh=1.0, progress_callback=lambda x: None, custom_resolution=np.array([0,0,0])):
-    import sys
-    print(f"\n[treeLoc] Starting treeLoc function")
-    sys.stdout.flush()
-    print(f"[treeLoc] Config file: {config_file}")
-    print(f"[treeLoc] Point cloud shape: {pcd.shape}")
-    print(f"[treeLoc] Model path: {model_path}")
-    print(f"[treeLoc] Use CUDA: {use_cuda}")
-    print(f"[treeLoc] If stem: {if_stem}")
-    print(f"[treeLoc] Cutoff threshold: {cutoff_thresh}")
-    print(f"[treeLoc] Custom resolution: {custom_resolution}")
-    sys.stdout.flush()
     progress_callback(0)
-    print("[treeLoc] Progress callback initialized")
-    sys.stdout.flush()
     try:
-        print("[treeLoc] Loading config file...")
         with open(config_file) as json_file:
             configs = json.load(json_file)
-        print("[treeLoc] Config file loaded successfully")
     except Exception as e:
-        print(f"[treeLoc] ERROR loading config file: {config_file}")
-        print(f"[treeLoc] Error details: {e}")
+        print(config_file)
         print("Cannot load config file:", e)
         return
 
     nbmat_sz = np.array(configs["model"]["voxel_number_in_block"])
     min_res = np.array(configs["model"]["voxel_resolution_in_meter"])
-    print(f"[treeLoc] nbmat_sz: {nbmat_sz}")
-    print(f"[treeLoc] min_res (before custom): {min_res}")
     
     if custom_resolution[0]>0 and custom_resolution[1]>0 and custom_resolution[2]>0:
         min_res=custom_resolution
-        print(f"[treeLoc] min_res (after custom): {min_res}")
 
     try:
-        print("[treeLoc] Importing Segformer model...")
         from vox3DSegFormerDetection import Segformer
     except ImportError:
-        print("[treeLoc] ImportError for vox3DSegFormerDetection, trying relative import...")
         from .vox3DSegFormerDetection import Segformer
-    print("[treeLoc] Segformer imported successfully")
 
-    print("[treeLoc] Creating Segformer model...")
     model = Segformer(
         if_stem=if_stem,
         block3d_size=nbmat_sz,
@@ -155,41 +132,28 @@ def treeLoc(config_file, pcd, model_path, use_cuda=True,if_stem=False,cutoff_thr
         sr_ratios=configs["model"]["SR_ratios"],
         drop_rate=0.0,drop_path_rate=0.0,
     )
-    print("[treeLoc] Segformer model created")
 
     device = "cuda" if use_cuda else "cpu"
-    print(f"[treeLoc] Device: {device}")
 
     if use_cuda:
-        print("[treeLoc] Moving model to GPU...")
         model = model.cuda()
-        print("[treeLoc] Loading model state dict from GPU...")
         state_dict = torch.load(model_path)
     else:
-        print("[treeLoc] Loading model state dict to CPU...")
         state_dict = torch.load(model_path,map_location=torch.device('cpu'))
-    
-    print("[treeLoc] Processing model state dict...")
+
     model.max_accu = state_dict.get('max_accu', 0.0)
     if 'max_accu' in state_dict:
         state_dict.pop('max_accu')
 
-    print("[treeLoc] Loading state dict into model...")
     model.load_state_dict(state_dict)
-    print("[treeLoc] Setting model to eval mode...")
     model.eval()
-    print("[treeLoc] Model loaded and configured successfully")
 
     progress_callback(5)
 
-    print("[treeLoc] Processing point cloud data...")
     nb_tsz = int(np.prod(nbmat_sz))
     pcd_min = np.min(pcd[:, :3], axis=0)
-    print(f"[treeLoc] Point cloud min: {pcd_min}")
-    print(f"[treeLoc] Total voxel size: {nb_tsz}")
 
     if if_stem:
-        print("[treeLoc] Processing stem data...")
         cut_grid_res=5.0#rough tile size to filter lowest point and to cut the stem upper height
         tile_ij = np.floor((pcd[:, :2] - pcd_min[:2]) / cut_grid_res).astype(np.int32)
         _, tile_idx_groups = npi.group_by(tile_ij, np.arange(len(tile_ij)))
@@ -200,18 +164,14 @@ def treeLoc(config_file, pcd, model_path, use_cuda=True,if_stem=False,cutoff_thr
         filter_idx=np.concatenate(filter_idx)
         # filter_idx=(pcd[:,2]-pcd_min[2])<(np.max(pcd[:,2])-pcd_min[2])*cutoff_thresh
         pcd=pcd[filter_idx]
-        print(f"[treeLoc] After stem filtering: {len(pcd)} points")
 
     block_ij = np.floor((pcd[:, :2] - pcd_min[:2]) / min_res[:2] / nbmat_sz[:2]).astype(np.int32)
     _, block_idx_groups = npi.group_by(block_ij, np.arange(len(block_ij)))
-    print(f"[treeLoc] Number of blocks: {len(block_idx_groups)}")
 
     nb_idxs = []
     nb_pcd_idxs = []
     nb_inverse_idxs = []
     sp_mins = []
-
-    print("[treeLoc] Processing blocks...")
 
     for iter, idx in enumerate(block_idx_groups):
         columns_sp = pcd[idx, :]
@@ -230,15 +190,10 @@ def treeLoc(config_file, pcd, model_path, use_cuda=True,if_stem=False,cutoff_thr
         nb_inverse_idxs.append(nb_inverse_idx)
         nb_pcd_idxs.append(nb_pcd_idx)
         sp_mins.append(sp_min)
-        
-        if iter % max(1, len(block_idx_groups)//10) == 0:
-            print(f"[treeLoc] Block processing: {iter}/{len(block_idx_groups)}")
 
-    print(f"[treeLoc] Block processing complete. Total blocks: {len(nb_idxs)}")
     progress_callback(15)
 
     if if_stem:
-        print("[treeLoc] Starting stem TreeLoc inference...")
         pred_patches = []
         for k, idx in enumerate(nb_idxs):
             x = torch.zeros(nb_tsz, 1)
@@ -249,72 +204,21 @@ def treeLoc(config_file, pcd, model_path, use_cuda=True,if_stem=False,cutoff_thr
             x = torch.swapaxes(x, -1, 2)
 
             with torch.no_grad():
-                print(f"[treeLoc] Inferring block {k+1}/{len(nb_idxs)}...")
                 h = model(x.to(device))
-                print(f"[treeLoc] Block {k+1} inference complete")
             h = torch.swapaxes(h, 2, -1)
             pred_patches.append((torch.softmax(h, 1)[0, 1].cpu().detach().numpy() > 0.1))
 
             progress_value = int(65 * k / len(nb_idxs)) + 15
             progress_callback(progress_value)
-        
-        print("[treeLoc] Merging patches...")
-        pred_img = merge_patches(pcd_min, min_res, nbmat_sz, pred_patches, sp_mins)
-        print("[treeLoc] Finding peaks...")
-        pred_coord = peakfinder(pred_img, pcd_min, min_res)
-        print(f"[treeLoc] Found {len(pred_coord)} peaks")
 
-        print("[treeLoc] Building KD-tree...")
+        pred_img = merge_patches(pcd_min, min_res, nbmat_sz, pred_patches, sp_mins)
+        pred_coord = peakfinder(pred_img, pcd_min, min_res)
+
         tree = cKDTree(pcd[:,:2])
-        print("[treeLoc] Querying ball points...")
-        import sys
-        sys.stdout.flush()
-        import time
-        ball_start = time.time()
         pred_idxs = tree.query_ball_point(pred_coord[:, :2], 0.2,p=2)
-        ball_time = time.time() - ball_start
-        print(f"[treeLoc] Ball point query returned {len(pred_idxs)} results in {ball_time:.2f}s")
-        sys.stdout.flush()
-        print(f"[treeLoc] Extracting tree positions (optimized version)...")
-        sys.stdout.flush()
-        
-        # Optimized version with progress logging
-        start_time = time.time()
-        preds_list = []
-        empty_count = 0
-        processed_count = 0
-        
-        for idx_num, pred_idx in enumerate(pred_idxs):
-            if idx_num % max(1, len(pred_idxs)//20) == 0:
-                elapsed = time.time() - start_time
-                rate = (idx_num / elapsed) if elapsed > 0 else 0
-                eta = ((len(pred_idxs) - idx_num) / rate) if rate > 0 else 0
-                print(f"[treeLoc] Processing peak {idx_num}/{len(pred_idxs)} (elapsed: {elapsed:.2f}s, rate: {rate:.1f} peaks/s, ETA: {eta:.1f}s)")
-                sys.stdout.flush()
-            
-            try:
-                if len(pred_idx) == 0:
-                    empty_count += 1
-                    continue
-                
-                # Find the point with minimum z-coordinate (lowest point)
-                z_values = pcd[pred_idx, 2]
-                min_z_idx = np.argmin(z_values)
-                lowest_point_idx = pred_idx[min_z_idx]
-                preds_list.append(pcd[lowest_point_idx, :3])
-                processed_count += 1
-            except Exception as e:
-                print(f"[treeLoc] ERROR processing peak {idx_num}: {e}")
-                sys.stdout.flush()
-                continue
-        
-        preds = np.array(preds_list) if preds_list else np.empty((0, 3), dtype=np.float32)
-        elapsed_total = time.time() - start_time
-        print(f"[treeLoc] Extracted {len(preds)} tree locations (processed: {processed_count}, skipped empty: {empty_count}, total time: {elapsed_total:.2f}s)")
-        sys.stdout.flush()
+        preds = np.array([pcd[pred_idx[np.argmin(pcd[pred_idx, 2])], :3] for pred_idx in pred_idxs])
 
     else:
-        print("[treeLoc] Starting non-stem TreeLoc inference...")
         preds=np.zeros([len(pcd),5],dtype=np.float32)
         preds[:,:3]=pcd[:,:3]
 
@@ -324,15 +228,10 @@ def treeLoc(config_file, pcd, model_path, use_cuda=True,if_stem=False,cutoff_thr
                 x[idx, :] = 1.0
             x = torch.moveaxis(x.reshape((1, *nbmat_sz, 1)).float(), -1, 1)
             x = torch.swapaxes(x, -1, 2)
-            
-            print(f"[treeLoc] Processing block {k+1}/{len(nb_idxs)} for confidence and radius...")
             with torch.no_grad():
-                print(f"[treeLoc] Running model inference for block {k+1}...")
                 pred_conf, pred_radius = model(x.to(device))
-                print(f"[treeLoc] Model inference complete for block {k+1}")
                 # pred_conf, pred_radius = model(x)
 
-                print(f"[treeLoc] Processing confidence and radius outputs for block {k+1}...")
                 pred_conf_nonzero = torch.moveaxis(torch.unsqueeze(torch.moveaxis(torch.swapaxes(pred_conf, -1, 2), 1, -1).reshape((nb_tsz, 1))[idx, :], 0), -1, 1).detach().cpu().numpy()
                 pred_radius_nonzero = torch.moveaxis(torch.unsqueeze(torch.moveaxis(torch.swapaxes(pred_radius, -1, 2), 1, -1).reshape((nb_tsz, 1))[idx, :], 0), -1, 1).detach().cpu().numpy()
                 preds[nb_pcd_idxs[k],-2]=pred_conf_nonzero[0, 0][nb_inverse_idxs[k]]
@@ -341,8 +240,6 @@ def treeLoc(config_file, pcd, model_path, use_cuda=True,if_stem=False,cutoff_thr
                 progress_value = int(85 * k / len(nb_idxs)) + 15
                 progress_callback(progress_value)
 
-    print("[treeLoc] TreeLoc function completed successfully")
-    print(f"[treeLoc] Returning predictions with shape: {preds.shape}")
     return preds
 
 def postPeakExtraction(preds_tops,K=5,max_gap=0.3,min_rad=0.2,nms_thresh=0.3,progress_callback=lambda x: None):

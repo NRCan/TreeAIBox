@@ -363,7 +363,7 @@ def branchSegmentation(branch_pts,K=5, reg_strength=1.0,resolution=0.0):
 def movingAverage(x, w):
     return np.convolve(x, np.ones(w), 'valid') / w
 
-def findStems(pts,segs_centroids,segs_centroids_stem_labels,nn_centroids_k=5,weight_min_dist=0.05,max_stem_gap=0.10):#pts[x,y,z,stemcls[stem:1],init_segs]
+def findStems(pts,segs_centroids,segs_centroids_stem_labels,nn_centroids_k=5,weight_min_dist=0.05):#pts[x,y,z,stemcls[stem:1],init_segs]
     stempts=pts[pts[:,-2]>0]
     stem_labels_idx=np.where(segs_centroids_stem_labels>0)[0]
     segs_centroids_stem=segs_centroids[stem_labels_idx]
@@ -371,8 +371,7 @@ def findStems(pts,segs_centroids,segs_centroids_stem_labels,nn_centroids_k=5,wei
     kdtree = cKDTree(segs_centroids_stem[:, :3])
     centroids_nn_distances, centroids_nn_indices = kdtree.query(segs_centroids_stem[:, :3], k=nn_centroids_k + 1)
     # choose to calculate the knn neighbors of each point, and their label difference could be used to update the connectivity matrix#future: could reduce the time by ignoring paris between stem pts
-    print(f"[findStems] Using max_stem_gap={max_stem_gap}m to connect stem segments")
-    seg_id_pairs = getConnectivity(stempts, k=nn_centroids_k, max_distance=max_stem_gap)  # mutually connected or not
+    seg_id_pairs = getConnectivity(stempts, k=nn_centroids_k)  # mutually connected or not
     seg_id_pairs_set = set(map(tuple, seg_id_pairs))
     seg_id_pairs_set.update(set(map(tuple, seg_id_pairs[:, ::-1])))  # Add reverse pairs
 
@@ -424,47 +423,11 @@ def initSegmentation(pts,K_stem=5,reg_strength_stem=1.0,K_branch=10,reg_strength
     return init_segs.astype(np.int32)
 
 def refineBranchHead(tree,segs_centroids,max_distance=0.3):
-    print(f"[refineBranchHead] Starting with {len(tree)} tree paths")
-    print(f"[refineBranchHead] segs_centroids shape: {segs_centroids.shape}")
-    
     branch_head_segment=np.array([path[:3] for path in tree if len(path)>2])
-    print(f"[refineBranchHead] branch_head_segment shape: {branch_head_segment.shape}")
-    
-    if len(branch_head_segment) == 0:
-        print(f"[refineBranchHead] No branches with >2 nodes, returning unchanged tree")
-        return tree
-    
     branch_path_idx=np.array([i for i,path in enumerate(tree) if len(path)>2])
-    
-    # Extract indices and ensure we get 2D arrays
-    head_indices = branch_head_segment[:,0]
-    prev_indices = branch_head_segment[:, 1]
-    prev_prev_indices = branch_head_segment[:, 2]
-    
-    print(f"[refineBranchHead] head_indices shape: {head_indices.shape}, sample: {head_indices[:3]}")
-    
-    # Index into segs_centroids - this should always return 2D since segs_centroids is 2D
-    branch_head_pts = segs_centroids[head_indices]
-    print(f"[refineBranchHead] branch_head_pts shape: {branch_head_pts.shape}")
-    
-    # Ensure it's 2D (just in case we have a single branch)
-    if branch_head_pts.ndim == 1:
-        branch_head_pts = branch_head_pts.reshape(1, -1)
-        print(f"[refineBranchHead] Reshaped branch_head_pts to: {branch_head_pts.shape}")
-    
-    branch_head_previous_pts = segs_centroids[prev_indices]
-    if branch_head_previous_pts.ndim == 1:
-        branch_head_previous_pts = branch_head_previous_pts.reshape(1, -1)
-    
-    branch_head_previous_previous_pts = segs_centroids[prev_prev_indices]
-    if branch_head_previous_previous_pts.ndim == 1:
-        branch_head_previous_previous_pts = branch_head_previous_previous_pts.reshape(1, -1)
-    
-    # Now we can safely slice to :3 (though they should already be exactly 3 columns)
-    branch_head_pts = branch_head_pts[:, :3]
-    branch_head_previous_pts = branch_head_previous_pts[:, :3]
-    branch_head_previous_previous_pts = branch_head_previous_previous_pts[:, :3]
-    
+    branch_head_pts=segs_centroids[branch_head_segment[:,0]][:, :3]
+    branch_head_previous_pts=segs_centroids[branch_head_segment[:, 1]][:, :3]
+    branch_head_previous_previous_pts=segs_centroids[branch_head_segment[:, 2]][:, :3]
     branch_head_previous_dir=branch_head_previous_previous_pts-branch_head_previous_pts
     branch_head_previous_dir=branch_head_previous_dir/np.linalg.norm(branch_head_previous_dir, axis=-1)[:, np.newaxis]
 
@@ -599,75 +562,31 @@ def calculateRadius(pts,tree,segs_centroids,min_r=0.04):# this needs to be impro
 def applyQSM(pts,k_neighbors=6,max_graph_distance=40, max_connectivity_search_distance=0.03, occlusion_distance_cutoff=0.4,smooth_ma_k=3,progress_callback=lambda x: None,wd=None):#pts[x,y,z,stemcls[stem:1],init_segs]
     progress_callback(0)
 
-    print(f"[applyQSM] Input pts shape: {pts.shape}")
-    print(f"[applyQSM] pts columns: x, y, z, stemcls, init_segs")
-    print(f"[applyQSM] Unique init_segs values: {np.unique(pts[:, -1].astype(np.int32))[:10]}... (showing first 10)")
 
-    # Fixed: Need to aggregate each coordinate separately or use axis parameter
-    group_idx = pts[:, -1].astype(np.int32)
-    
-    # Aggregate x, y, z coordinates separately then stack
-    x_centroids = npg.aggregate(group_idx, pts[:, 0], func='mean')
-    y_centroids = npg.aggregate(group_idx, pts[:, 1], func='mean')
-    z_centroids = npg.aggregate(group_idx, pts[:, 2], func='mean')
-    segs_centroids = np.column_stack([x_centroids, y_centroids, z_centroids])
-    
-    print(f"[applyQSM] segs_centroids shape after aggregate: {segs_centroids.shape}")
-    print(f"[applyQSM] segs_centroids dtype: {segs_centroids.dtype}")
-    print(f"[applyQSM] First 3 centroids:\n{segs_centroids[:3]}")
-    
-    segs_centroids_counts = npg.aggregate(group_idx, 1, func='sum')#count points per segment
-    segs_centroids_stem_labels = npg.aggregate(group_idx, pts[:, -2], func='max')#pts[-2] is stemcls
-    _, segs_centroids_inverse_idx = np.unique(group_idx, return_inverse=True)
+    segs_centroids = npg.aggregate(pts[:, -1].astype(np.int32), pts[:, :3], axis=0, func=np.mean)#pts[-1] is init_segs
+    segs_centroids_counts = npg.aggregate(pts[:, -1].astype(np.int32), 1)#pts[-1] is init_segs
+    segs_centroids_stem_labels = npg.aggregate(pts[:, -1].astype(np.int32), pts[:, -2], axis=0, func=np.max)#pts[-1] is init_segs
+    _, segs_centroids_inverse_idx = np.unique(pts[:, -1].astype(np.int32), return_inverse=True)
 
     # find stems by the longest among the shortest pathes to the bottom point
-    print(f"[applyQSM] Finding stems...")
-    print(f"[applyQSM] segs_centroids_stem_labels unique values: {np.unique(segs_centroids_stem_labels)}")
-    print(f"[applyQSM] Number of segments with stem labels > 0: {np.sum(segs_centroids_stem_labels > 0)}")
-    
-    # Use 3x the connectivity distance for stem gaps to handle larger gaps at tree base
-    max_stem_gap = max_connectivity_search_distance * 3.0
-    stems_idx,segs_centroids_stem_labels=findStems(pts,segs_centroids,segs_centroids_stem_labels,max_stem_gap=max_stem_gap)
-    
-    print(f"[applyQSM] Found {len(stems_idx)} stem segments")
-    print(f"[applyQSM] Stem indices: {stems_idx[:10] if len(stems_idx) > 10 else stems_idx}... (showing first 10)")
-    
-    print(f"[applyQSM] Building connectivity graph...")
+    stems_idx,segs_centroids_stem_labels=findStems(pts,segs_centroids,segs_centroids_stem_labels)
     graph, rows0, cols0, distances0, seg_id_pairs_set = getPointwiseClusterDistance(pts, segs_centroids, segs_centroids_stem_labels, max_connectivity_search_k=k_neighbors, max_connectivity_search_distance=max_connectivity_search_distance, occlusion_distance_cutoff=occlusion_distance_cutoff*0.5,nn_centroids_k=k_neighbors)
-    
-    print(f"[applyQSM] Graph edges: {len(rows0)}")
-    print(f"[applyQSM] Graph shape: {graph.shape}")
-    print(f"[applyQSM] Graph non-zero elements: {graph.nnz}")
 
     progress_callback(40)
 
 
     n_segs_centroids=len(segs_centroids)
-    print(f"[applyQSM] Creating tree paths from {len(stems_idx)} stem segments...")
     tree,segs_labels,n_segs=recreateTreePath(stems_idx, graph, n_segs_centroids,max_graph_distance)
-    
-    print(f"[applyQSM] First tree creation: {len(tree)} paths")
-    print(f"[applyQSM] Number of labeled segments: {np.sum(segs_labels > 0)}/{len(segs_labels)}")
-    print(f"[applyQSM] Tree path lengths: {[len(path) for path in tree[:5]]}... (first 5)")
 
     progress_callback(60)
 
 
     stem_new_ind=segs_labels>0
     stem_new_idx=np.where(stem_new_ind)[0]
-    
-    print(f"[applyQSM] Updating graph for less connected branches...")
-    print(f"[applyQSM] Segments connected so far: {len(stem_new_idx)}")
 
     # repeat the shortest path algorithm to the "less connected" branches
     graph=updatePointwiseClusterDistance(rows0, cols0, distances0, seg_id_pairs_set, stem_new_ind, occlusion_distance_cutoff=occlusion_distance_cutoff,weight_min_dist=0.03)
-    print(f"[applyQSM] Updated graph non-zero elements: {graph.nnz}")
-    
     tree, segs_labels,n_segs = recreateTreePath(stem_new_idx, graph,n_segs_centroids, max_graph_distance,tree,init_seg_id=n_segs+1,segs_labels=segs_labels)
-    
-    print(f"[applyQSM] After second iteration: {len(tree)} paths")
-    print(f"[applyQSM] Number of labeled segments: {np.sum(segs_labels > 0)}/{len(segs_labels)}")
-    print(f"[applyQSM] Tree path lengths: {[len(path) for path in tree[:5]]}... (first 5)")
 
     progress_callback(70)
 
