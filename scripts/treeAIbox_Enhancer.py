@@ -12,10 +12,10 @@ import laspy
 import pyvista as pv
 from pyvistaqt import QtInteractor
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QListWidget, QListWidgetItem, QLineEdit, QLabel, QFileDialog,
     QMessageBox, QProgressBar, QSplitter, QFrame, QComboBox, QCheckBox,
-    QGroupBox, QScrollArea, QTextEdit, QDialog, QButtonGroup, QRadioButton, QSpinBox
+    QGroupBox, QScrollArea, QTextEdit, QDialog, QButtonGroup, QRadioButton, QSpinBox, QDoubleSpinBox
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QPalette, QColor
@@ -24,6 +24,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
 from datetime import datetime
+from typing import Any, Dict, List, Optional, Tuple
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial.distance import cdist
@@ -382,6 +383,220 @@ class ITCAssignmentDialog(QDialog):
         self.accept()
 
 
+class BatchSkipOptionsDialog(QDialog):
+    """Dialog to ask whether to skip certain trees during batch processing."""
+
+    def __init__(self, parent=None, default_threshold=50):
+        super().__init__(parent)
+        self.default_threshold = int(default_threshold)
+        self.selected = False
+        self.init_ui()
+
+    def init_ui(self):
+        self.setWindowTitle("Batch: Skip Options")
+        self.setModal(True)
+        layout = QVBoxLayout(self)
+
+        title = QLabel("Batch skip options (applies to all trees):")
+        title.setStyleSheet("font-weight: bold;")
+        layout.addWidget(title)
+
+        self.skip_no_trunk_cb = QCheckBox("Skip trees with no trunk detected")
+        self.skip_no_trunk_cb.setChecked(True)
+        layout.addWidget(self.skip_no_trunk_cb)
+
+        h = QHBoxLayout()
+        self.skip_small_trunk_cb = QCheckBox("Skip trees when largest trunk has <")
+        self.skip_small_trunk_cb.setChecked(True)
+        h.addWidget(self.skip_small_trunk_cb)
+        self.small_trunk_threshold = QSpinBox()
+        self.small_trunk_threshold.setRange(1, 1000000)
+        self.small_trunk_threshold.setValue(self.default_threshold)
+        self.small_trunk_threshold.setSuffix(" pts")
+        h.addWidget(self.small_trunk_threshold)
+        layout.addLayout(h)
+
+        info = QLabel("These settings are applied once at the start for all trees in the batch.")
+        layout.addWidget(info)
+
+        btns = QHBoxLayout()
+        ok = ModernButton("OK")
+        ok.clicked.connect(self.accept)
+        btns.addWidget(ok)
+        cancel = ModernButton("Cancel")
+        cancel.clicked.connect(self.reject)
+        btns.addWidget(cancel)
+        layout.addLayout(btns)
+
+    def get_options(self):
+        return {
+            'skip_no_trunk': bool(self.skip_no_trunk_cb.isChecked()),
+            'skip_small_trunk': bool(self.skip_small_trunk_cb.isChecked()),
+            'small_trunk_threshold': int(self.small_trunk_threshold.value())
+        }
+
+
+class BatchTrunkParamsDialog(QDialog):
+    """Dialog to configure trunk-detection parameters for batch runs."""
+
+    def __init__(self, parent=None, defaults=None):
+        super().__init__(parent)
+        self.defaults = defaults or {}
+        self.init_ui()
+
+    def init_ui(self):
+        self.setWindowTitle("Batch: Trunk Detection Parameters")
+        self.setModal(True)
+        layout = QVBoxLayout(self)
+
+        # Slice height (cm)
+        h1 = QHBoxLayout()
+        h1.addWidget(QLabel("Slice height (cm):"))
+        self.slice_height_spin = QSpinBox()
+        self.slice_height_spin.setRange(1, 200)
+        self.slice_height_spin.setValue(int(self.defaults.get('slice_height_cm', 25)))
+        h1.addWidget(self.slice_height_spin)
+        layout.addLayout(h1)
+
+        # Base zone height (m)
+        h2 = QHBoxLayout()
+        h2.addWidget(QLabel("Base zone height (m, 0=full):"))
+        self.base_zone = QDoubleSpinBox()
+        self.base_zone.setRange(0.0, 100.0)
+        self.base_zone.setDecimals(2)
+        self.base_zone.setValue(float(self.defaults.get('base_zone_height_m', 0.0)))
+        h2.addWidget(self.base_zone)
+        layout.addLayout(h2)
+
+        # DBSCAN eps and min_samples
+        h3 = QHBoxLayout()
+        h3.addWidget(QLabel("DBSCAN eps (m):"))
+        self.eps = QDoubleSpinBox()
+        self.eps.setRange(0.0, 10.0)
+        self.eps.setDecimals(3)
+        self.eps.setValue(float(self.defaults.get('eps_m', 0.18)))
+        h3.addWidget(self.eps)
+        h3.addWidget(QLabel("min_samples:"))
+        self.min_samples = QSpinBox()
+        self.min_samples.setRange(1, 1000)
+        self.min_samples.setValue(int(self.defaults.get('min_samples', 8)))
+        h3.addWidget(self.min_samples)
+        layout.addLayout(h3)
+
+        # Merge distance, min points, min span
+        h4 = QHBoxLayout()
+        h4.addWidget(QLabel("merge_dist (m):"))
+        self.merge_dist = QDoubleSpinBox()
+        self.merge_dist.setRange(0.0, 10.0)
+        self.merge_dist.setDecimals(3)
+        self.merge_dist.setValue(float(self.defaults.get('merge_dist_m', 0.25)))
+        h4.addWidget(self.merge_dist)
+        h4.addWidget(QLabel("min_trunk_points:"))
+        self.min_trunk_points = QSpinBox()
+        self.min_trunk_points.setRange(1, 100000)
+        self.min_trunk_points.setValue(int(self.defaults.get('min_trunk_points', 120)))
+        h4.addWidget(self.min_trunk_points)
+        layout.addLayout(h4)
+
+        h5 = QHBoxLayout()
+        h5.addWidget(QLabel("min_vertical_span_m:"))
+        self.min_span = QDoubleSpinBox()
+        self.min_span.setRange(0.0, 100.0)
+        self.min_span.setDecimals(2)
+        self.min_span.setValue(float(self.defaults.get('min_vertical_span_m', 1.0)))
+        h5.addWidget(self.min_span)
+        h5.addWidget(QLabel("full_height_assign_dist_m:"))
+        self.full_assign = QDoubleSpinBox()
+        self.full_assign.setRange(0.0, 10.0)
+        self.full_assign.setDecimals(3)
+        self.full_assign.setValue(float(self.defaults.get('full_height_assign_dist_m', 0.45)))
+        h5.addWidget(self.full_assign)
+        layout.addLayout(h5)
+
+        btns = QHBoxLayout()
+        ok = ModernButton("OK")
+        ok.clicked.connect(self.accept)
+        btns.addWidget(ok)
+        cancel = ModernButton("Cancel")
+        cancel.clicked.connect(self.reject)
+        btns.addWidget(cancel)
+        layout.addLayout(btns)
+
+    def get_params(self):
+        return {
+            'slice_height_cm': int(self.slice_height_spin.value()),
+            'base_zone_height_m': float(self.base_zone.value()),
+            'eps_m': float(self.eps.value()),
+            'min_samples': int(self.min_samples.value()),
+            'merge_dist_m': float(self.merge_dist.value()),
+            'min_trunk_points': int(self.min_trunk_points.value()),
+            'min_vertical_span_m': float(self.min_span.value()),
+            'full_height_assign_dist_m': float(self.full_assign.value())
+        }
+
+
+class BatchBranchParamsDialog(QDialog):
+    """Dialog to configure branch-detection parameters for batch runs."""
+
+    def __init__(self, parent=None, defaults=None):
+        super().__init__(parent)
+        self.defaults = defaults or {}
+        self.init_ui()
+
+    def init_ui(self):
+        self.setWindowTitle("Batch: Branch Detection Parameters")
+        self.setModal(True)
+        layout = QVBoxLayout(self)
+
+        h1 = QHBoxLayout()
+        h1.addWidget(QLabel("Slice height (cm):"))
+        self.slice_height = QSpinBox()
+        self.slice_height.setRange(1, 200)
+        self.slice_height.setValue(int(self.defaults.get('slice_height_cm', 25)))
+        h1.addWidget(self.slice_height)
+        layout.addLayout(h1)
+
+        h2 = QHBoxLayout()
+        h2.addWidget(QLabel("Branch DBSCAN eps (m):"))
+        self.branch_eps = QDoubleSpinBox()
+        self.branch_eps.setRange(0.0, 10.0)
+        self.branch_eps.setDecimals(3)
+        self.branch_eps.setValue(float(self.defaults.get('branch_eps', 0.12)))
+        h2.addWidget(self.branch_eps)
+        h2.addWidget(QLabel("min_samples:"))
+        self.branch_min_samples = QSpinBox()
+        self.branch_min_samples.setRange(1, 1000)
+        self.branch_min_samples.setValue(int(self.defaults.get('branch_min_samples', 6)))
+        h2.addWidget(self.branch_min_samples)
+        layout.addLayout(h2)
+
+        h3 = QHBoxLayout()
+        h3.addWidget(QLabel("merge_dist (m):"))
+        self.branch_merge = QDoubleSpinBox()
+        self.branch_merge.setRange(0.0, 10.0)
+        self.branch_merge.setDecimals(3)
+        self.branch_merge.setValue(float(self.defaults.get('branch_merge_dist', 0.25)))
+        h3.addWidget(self.branch_merge)
+        layout.addLayout(h3)
+
+        btns = QHBoxLayout()
+        ok = ModernButton("OK")
+        ok.clicked.connect(self.accept)
+        btns.addWidget(ok)
+        cancel = ModernButton("Cancel")
+        cancel.clicked.connect(self.reject)
+        btns.addWidget(cancel)
+        layout.addLayout(btns)
+
+    def get_params(self):
+        return {
+            'slice_height_cm': int(self.slice_height.value()),
+            'branch_eps': float(self.branch_eps.value()),
+            'branch_min_samples': int(self.branch_min_samples.value()),
+            'branch_merge_dist': float(self.branch_merge.value())
+        }
+
+
 class TreeVisualizerGUI(QMainWindow):
     """Main window for tree visualization GUI."""
 
@@ -418,6 +633,34 @@ class TreeVisualizerGUI(QMainWindow):
         self.last_analyzed_points = None  # Store points from last AI analysis for noise conversion
         self.tree_centroids_cache = {}  # Cache for tree centroids to speed up neighbor calculations
         self.centroids_kdtree = None  # KDTree for fast spatial queries
+        
+        # Trunk detection variables (Phase 1)
+        self.trunk_assignment = None  # Array: -1 = noise, >=0 = trunk_id
+        self.trunk_models = {}  # Dict: trunk_id -> {'trajectory': [centroids], 'points': count, 'z_span': (min, max)}
+        self.trunk_detection_params = {
+            'slice_height_cm': 25,
+            'base_zone_height_m': 0.0,
+            'eps_m': 0.18,
+            'min_samples': 8,
+            'merge_dist_m': 0.25,
+            'min_trunk_points': 120,
+            'min_vertical_span_m': 1.0,
+            'full_height_assign_dist_m': 0.45
+        }
+        # Detection state/versioning to prevent redundant recalculation
+        self._trunk_detection_version = 0
+        self._branch_detection_version = 0
+        # Signature of last volume calculation: (tree_id, trunk_version, branch_version)
+        self._last_volume_calc_signature = None
+        # Last used detection parameters for change detection
+        self._last_trunk_detection_params = None
+        self._last_branch_detection_params = None
+        # Monotonic counter to keep volume overlay actor names unique per successful calculation run
+        self._volume_calc_run_id = 0
+        
+        # Branch detection variables
+        self.branch_assignment = None  # Array: -1 = noise, >=0 = branch_id
+        self.branch_meta = {}  # Dict: global_branch_id -> {trunk_id, local_id, point_count, z_span}
         print(f"[INIT] {time.strftime('%H:%M:%S')} - Instance variables set ({time.perf_counter() - init_start:.3f}s)")
         
 
@@ -709,12 +952,14 @@ class TreeVisualizerGUI(QMainWindow):
         sidebar = QWidget()
         sidebar.setObjectName("sidebar")
         sidebar.setStyleSheet("#sidebar { background-color: #363636; border-radius: 8px; }")
-        sidebar.setMaximumWidth(320)
-        sidebar.setMinimumWidth(280)
+        sidebar.setMinimumWidth(420)
+        sidebar.setMaximumWidth(560)
         
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setWidget(sidebar)
+        scroll_area.setMinimumWidth(420)
+        scroll_area.setMaximumWidth(560)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll_area.setStyleSheet("""
             QScrollArea {
@@ -758,18 +1003,15 @@ class TreeVisualizerGUI(QMainWindow):
         volume_layout = QVBoxLayout(volume_group)
         volume_layout.setSpacing(8)
 
-        # Volume folder selection
+        # Volume folder display (auto-assigned on save/load)
         folder_layout = QHBoxLayout()
         folder_label = QLabel("Volume Folder:")
         folder_label.setFixedWidth(100)
-        self.volume_folder_label = QLabel("No folder selected")
-        self.volume_folder_label.setStyleSheet("color: #bbbbbb; font-style: italic;")
+        self.volume_folder_label = QLabel("Auto-assigned")
+        self.volume_folder_label.setStyleSheet("color: #4CAF50; font-style: italic;")
         self.volume_folder_label.setWordWrap(True)
-        self.select_volume_folder_button = ModernButton("Select Folder")
-        self.select_volume_folder_button.clicked.connect(self.select_volume_folder)
         folder_layout.addWidget(folder_label)
         folder_layout.addWidget(self.volume_folder_label, 1)
-        folder_layout.addWidget(self.select_volume_folder_button)
         volume_layout.addLayout(folder_layout)
 
         # Volume folder options
@@ -931,150 +1173,378 @@ class TreeVisualizerGUI(QMainWindow):
         neighbor_layout.addStretch()
         viz_layout.addLayout(neighbor_layout)
 
-        # Control buttons
+        # Control buttons - organized by category
         button_layout = QVBoxLayout()
-        button_layout.setSpacing(8)
+        button_layout.setSpacing(6)
         
+        # === VISUALIZATION SECTION ===
         self.visualize_button = ModernButton("Visualize Tree")
         self.visualize_button.clicked.connect(self.visualize_tree)
         self.visualize_button.setEnabled(False)
+        self.visualize_button.setFixedHeight(32)
         button_layout.addWidget(self.visualize_button)
 
-        self.trunk_button = ModernButton("Trunk Visualisation")
+        self.trunk_button = ModernButton("Trunk Visualization")
         self.trunk_button.clicked.connect(self.visualize_trunk)
         self.trunk_button.setEnabled(False)
+        self.trunk_button.setFixedHeight(32)
         button_layout.addWidget(self.trunk_button)
 
-        # Add polygon selection controls right below trunk button
-        polygon_layout = QVBoxLayout()
-        self.draw_polygon_button = ModernButton("Draw Selection")
+        # === SELECTION SECTION ===
+        selection_label = QLabel("Point Selection")
+        selection_label.setStyleSheet("font-weight: bold; color: #4CAF50; margin-top: 10px; margin-bottom: 3px;")
+        button_layout.addWidget(selection_label)
+        
+        selection_grid = QGridLayout()
+        selection_grid.setSpacing(4)
+        
+        self.draw_polygon_button = ModernButton("Draw Polygon")
         self.draw_polygon_button.clicked.connect(self.on_draw_polygon_button_clicked)
         self.draw_polygon_button.setEnabled(False)
+        self.draw_polygon_button.setFixedHeight(28)
+        self.draw_polygon_button.setStyleSheet("QPushButton { font-size: 10px; padding: 2px 6px; }")
         self.draw_polygon_button.setToolTip("Draw a polygon to select points and assign new ITC values")
-        
-        # Initialize flag for polygon selection state
         self.polygon_selection_active = False
+        selection_grid.addWidget(self.draw_polygon_button, 0, 0)
         
-        self.select_all_points_button = ModernButton("Select All Points")
+        self.select_all_points_button = ModernButton("Select All")
         self.select_all_points_button.clicked.connect(self.select_all_points)
         self.select_all_points_button.setEnabled(False)
+        self.select_all_points_button.setFixedHeight(28)
+        self.select_all_points_button.setStyleSheet("QPushButton { font-size: 10px; padding: 2px 6px; }")
         self.select_all_points_button.setToolTip("Select all points in the current visualization without drawing")
+        selection_grid.addWidget(self.select_all_points_button, 0, 1)
         
         self.assign_itc_button = ModernButton("Assign ITC")
         self.assign_itc_button.clicked.connect(lambda: self.assign_itc_to_selection())
         self.assign_itc_button.setEnabled(False)
+        self.assign_itc_button.setFixedHeight(28)
+        self.assign_itc_button.setStyleSheet("QPushButton { font-size: 10px; padding: 2px 6px; }")
         self.assign_itc_button.setToolTip("Assign new ITC value to selected points")
+        selection_grid.addWidget(self.assign_itc_button, 0, 2)
         
-        polygon_layout.addWidget(self.draw_polygon_button)
-        polygon_layout.addWidget(self.select_all_points_button)
-        polygon_layout.addWidget(self.assign_itc_button)
-        button_layout.addLayout(polygon_layout)
+        button_layout.addLayout(selection_grid)
 
-        self.volume_calc_button = ModernButton("Volume Calculation")
+        # === VOLUME CALCULATION SECTION ===
+        volume_label = QLabel("Volume Analysis")
+        volume_label.setStyleSheet("font-weight: bold; color: #4CAF50; margin-top: 10px; margin-bottom: 3px;")
+        button_layout.addWidget(volume_label)
+        
+        self.volume_calc_button = ModernButton("Calculate Volume")
         self.volume_calc_button.clicked.connect(self.calculate_volume_from_selection)
         self.volume_calc_button.setEnabled(False)
+        self.volume_calc_button.setFixedHeight(32)
         self.volume_calc_button.setToolTip("Perform circle fitting on selected points for volume calculation")
         button_layout.addWidget(self.volume_calc_button)
 
-        self.save_volume_button = ModernButton("Save Volume Data")
+        volume_data_grid = QGridLayout()
+        volume_data_grid.setSpacing(4)
+        
+        self.save_volume_button = ModernButton("Save Data")
         self.save_volume_button.clicked.connect(self.save_volume_data)
         self.save_volume_button.setEnabled(False)
+        self.save_volume_button.setFixedHeight(28)
+        self.save_volume_button.setStyleSheet("QPushButton { font-size: 10px; padding: 2px 6px; }")
         self.save_volume_button.setToolTip("Save current volume calculation data to file")
-        button_layout.addWidget(self.save_volume_button)
+        volume_data_grid.addWidget(self.save_volume_button, 0, 0)
 
-        self.load_volume_button = ModernButton("Load Volume Data")
+        self.load_volume_button = ModernButton("Load Data")
         self.load_volume_button.clicked.connect(self.load_volume_data)
         self.load_volume_button.setEnabled(True)
+        self.load_volume_button.setFixedHeight(28)
+        self.load_volume_button.setStyleSheet("QPushButton { font-size: 10px; padding: 2px 6px; }")
         self.load_volume_button.setToolTip("Load volume calculation data from file")
-        button_layout.addWidget(self.load_volume_button)
+        volume_data_grid.addWidget(self.load_volume_button, 0, 1)
 
-        # Select folder for batch volume saves
-        self.volume_folder_button = ModernButton("Select Volume Folder")
-        self.volume_folder_button.clicked.connect(self.select_volume_folder)
-        self.volume_folder_button.setEnabled(True)
-        self.volume_folder_button.setToolTip("Pre-select folder for batch volume saves (avoids repeated folder selection)")
-        button_layout.addWidget(self.volume_folder_button)
-
-        self.clear_volume_button = ModernButton("Clear Volume Results")
+        self.clear_volume_button = ModernButton("Clear Results")
         self.clear_volume_button.clicked.connect(self.clear_accumulated_volume)
         self.clear_volume_button.setEnabled(False)
+        self.clear_volume_button.setFixedHeight(28)
+        self.clear_volume_button.setStyleSheet("QPushButton { font-size: 10px; padding: 2px 6px; }")
         self.clear_volume_button.setToolTip("Clear all accumulated volume calculation results")
-        button_layout.addWidget(self.clear_volume_button)
+        volume_data_grid.addWidget(self.clear_volume_button, 0, 2)
 
+        self.export_trunks_button = ModernButton("Export Trunks")
+        self.export_trunks_button.clicked.connect(self.export_trunk_metrics)
+        self.export_trunks_button.setEnabled(False)
+        self.export_trunks_button.setFixedHeight(28)
+        self.export_trunks_button.setStyleSheet("QPushButton { font-size: 10px; padding: 2px 6px; }")
+        self.export_trunks_button.setToolTip("Export detected trunk location, total volume, and DBH to CSV")
+        volume_data_grid.addWidget(self.export_trunks_button, 1, 0, 1, 3)
+        
+        button_layout.addLayout(volume_data_grid)
 
+        # === TRUNK DETECTION SECTION ===
+        trunk_label = QLabel("Trunk Separation")
+        trunk_label.setStyleSheet("font-weight: bold; color: #4CAF50; margin-top: 10px; margin-bottom: 3px;")
+        button_layout.addWidget(trunk_label)
+        
+        trunk_grid = QGridLayout()
+        trunk_grid.setSpacing(4)
 
-        self.crown_polygon_button = ModernButton("Tree Crown Polygon")
-        self.crown_polygon_button.clicked.connect(self.create_tree_crown_polygon)
-        self.crown_polygon_button.setEnabled(False)
-        self.crown_polygon_button.setToolTip("Create 2D polygon from all tree points projected to XY plane")
-        button_layout.addWidget(self.crown_polygon_button)
+        self.trunk_slice_height_input = QSpinBox()
+        self.trunk_slice_height_input.setMinimum(5)
+        self.trunk_slice_height_input.setMaximum(50)
+        self.trunk_slice_height_input.setValue(25)
+        self.trunk_slice_height_input.setSuffix(" cm")
+        self.trunk_slice_height_input.setFixedWidth(70)
+        self.trunk_slice_height_input.setFixedHeight(26)
+        self.trunk_slice_height_input.setStyleSheet("font-size: 9px;")
+        self.trunk_slice_height_input.setToolTip("Height of each trunk slice for trunk detection")
 
+        self.trunk_base_zone_input = QDoubleSpinBox()
+        self.trunk_base_zone_input.setMinimum(0.0)
+        self.trunk_base_zone_input.setMaximum(50.0)
+        self.trunk_base_zone_input.setSingleStep(0.1)
+        self.trunk_base_zone_input.setDecimals(2)
+        self.trunk_base_zone_input.setValue(0.0)
+        self.trunk_base_zone_input.setSuffix(" m")
+        self.trunk_base_zone_input.setFixedWidth(80)
+        self.trunk_base_zone_input.setFixedHeight(26)
+        self.trunk_base_zone_input.setStyleSheet("font-size: 9px;")
+        self.trunk_base_zone_input.setToolTip("Trunk slice range from min Z. Set to 0.0 for full-height slicing")
 
+        self.trunk_eps_input = QDoubleSpinBox()
+        self.trunk_eps_input.setMinimum(0.01)
+        self.trunk_eps_input.setMaximum(5.0)
+        self.trunk_eps_input.setSingleStep(0.01)
+        self.trunk_eps_input.setDecimals(2)
+        self.trunk_eps_input.setValue(0.18)
+        self.trunk_eps_input.setSuffix(" m")
+        self.trunk_eps_input.setFixedWidth(75)
+        self.trunk_eps_input.setFixedHeight(26)
+        self.trunk_eps_input.setStyleSheet("font-size: 9px;")
+        self.trunk_eps_input.setToolTip("DBSCAN eps radius for trunk clustering")
 
-    # Extract component buttons removed per user request
+        self.trunk_min_samples_input = QSpinBox()
+        self.trunk_min_samples_input.setMinimum(1)
+        self.trunk_min_samples_input.setMaximum(1000)
+        self.trunk_min_samples_input.setValue(8)
+        self.trunk_min_samples_input.setFixedWidth(60)
+        self.trunk_min_samples_input.setFixedHeight(26)
+        self.trunk_min_samples_input.setStyleSheet("font-size: 9px;")
+        self.trunk_min_samples_input.setToolTip("Minimum samples for trunk DBSCAN")
 
-        self.dbh_circles_button = ModernButton("DBH Circle Fitting")
-        self.dbh_circles_button.clicked.connect(self.visualize_dbh_circles)
-        self.dbh_circles_button.setEnabled(False)
-        self.dbh_circles_button.setToolTip("Show circle fitting trajectory for DBH points in 3D")
-        button_layout.addWidget(self.dbh_circles_button)
+        self.trunk_merge_dist_input = QDoubleSpinBox()
+        self.trunk_merge_dist_input.setMinimum(0.01)
+        self.trunk_merge_dist_input.setMaximum(5.0)
+        self.trunk_merge_dist_input.setSingleStep(0.01)
+        self.trunk_merge_dist_input.setDecimals(2)
+        self.trunk_merge_dist_input.setValue(0.25)
+        self.trunk_merge_dist_input.setSuffix(" m")
+        self.trunk_merge_dist_input.setFixedWidth(75)
+        self.trunk_merge_dist_input.setFixedHeight(26)
+        self.trunk_merge_dist_input.setStyleSheet("font-size: 9px;")
+        self.trunk_merge_dist_input.setToolTip("Max centroid distance to merge clusters across slices")
 
-        self.fit_to_screen_button = ModernButton("Fit to Screen")
-        self.fit_to_screen_button.clicked.connect(self.fit_to_screen)
-        self.fit_to_screen_button.setEnabled(False)
-        self.fit_to_screen_button.setToolTip("Reset camera to fit all visible objects in the view")
-        button_layout.addWidget(self.fit_to_screen_button)
+        self.trunk_min_points_input = QSpinBox()
+        self.trunk_min_points_input.setMinimum(1)
+        self.trunk_min_points_input.setMaximum(100000)
+        self.trunk_min_points_input.setValue(120)
+        self.trunk_min_points_input.setFixedWidth(70)
+        self.trunk_min_points_input.setFixedHeight(26)
+        self.trunk_min_points_input.setStyleSheet("font-size: 9px;")
+        self.trunk_min_points_input.setToolTip("Minimum trunk points after base-zone clustering")
 
-        self.split_button = ModernButton("Split Detection")
-        self.split_button.clicked.connect(self.analyze_splits)
-        self.split_button.setEnabled(False)
-        button_layout.addWidget(self.split_button)
+        self.trunk_min_span_input = QDoubleSpinBox()
+        self.trunk_min_span_input.setMinimum(0.0)
+        self.trunk_min_span_input.setMaximum(50.0)
+        self.trunk_min_span_input.setSingleStep(0.1)
+        self.trunk_min_span_input.setDecimals(2)
+        self.trunk_min_span_input.setValue(1.0)
+        self.trunk_min_span_input.setSuffix(" m")
+        self.trunk_min_span_input.setFixedWidth(75)
+        self.trunk_min_span_input.setFixedHeight(26)
+        self.trunk_min_span_input.setStyleSheet("font-size: 9px;")
+        self.trunk_min_span_input.setToolTip("Minimum vertical span required to keep a trunk")
 
-        # Add Decluster Branches controls
-        decluster_layout = QHBoxLayout()
+        self.trunk_full_assign_input = QDoubleSpinBox()
+        self.trunk_full_assign_input.setMinimum(0.01)
+        self.trunk_full_assign_input.setMaximum(10.0)
+        self.trunk_full_assign_input.setSingleStep(0.01)
+        self.trunk_full_assign_input.setDecimals(2)
+        self.trunk_full_assign_input.setValue(0.45)
+        self.trunk_full_assign_input.setSuffix(" m")
+        self.trunk_full_assign_input.setFixedWidth(75)
+        self.trunk_full_assign_input.setFixedHeight(26)
+        self.trunk_full_assign_input.setStyleSheet("font-size: 9px;")
+        self.trunk_full_assign_input.setToolTip("Max distance for extending trunk assignment to full height")
+
+        trunk_grid.addWidget(QLabel("Slice"), 0, 0)
+        trunk_grid.addWidget(self.trunk_slice_height_input, 0, 1)
+        trunk_grid.addWidget(QLabel("Base"), 0, 2)
+        trunk_grid.addWidget(self.trunk_base_zone_input, 0, 3)
+        trunk_grid.addWidget(QLabel("eps"), 0, 4)
+        trunk_grid.addWidget(self.trunk_eps_input, 0, 5)
+
+        trunk_grid.addWidget(QLabel("minS"), 1, 0)
+        trunk_grid.addWidget(self.trunk_min_samples_input, 1, 1)
+        trunk_grid.addWidget(QLabel("merge"), 1, 2)
+        trunk_grid.addWidget(self.trunk_merge_dist_input, 1, 3)
+        trunk_grid.addWidget(QLabel("minPts"), 1, 4)
+        trunk_grid.addWidget(self.trunk_min_points_input, 1, 5)
+
+        trunk_grid.addWidget(QLabel("span"), 2, 0)
+        trunk_grid.addWidget(self.trunk_min_span_input, 2, 1)
+        trunk_grid.addWidget(QLabel("extend"), 2, 2)
+        trunk_grid.addWidget(self.trunk_full_assign_input, 2, 3)
+        
+        self.detect_trunks_button = ModernButton("Detect Trunks")
+        self.detect_trunks_button.clicked.connect(self.detect_trunks_in_slices)
+        self.detect_trunks_button.setEnabled(False)
+        self.detect_trunks_button.setFixedHeight(28)
+        self.detect_trunks_button.setStyleSheet("QPushButton { font-size: 10px; padding: 2px 6px; }")
+        self.detect_trunks_button.setToolTip("Separate individual trunks in base zone using horizontal slicing + DBSCAN")
+        trunk_grid.addWidget(self.detect_trunks_button, 3, 0, 1, 6)
+
+        self.raw_trunk_view_checkbox = QCheckBox("Raw")
+        self.raw_trunk_view_checkbox.setChecked(False)
+        self.raw_trunk_view_checkbox.setToolTip("Show raw base-zone trunk detections instead of filtered trunks")
+        self.raw_trunk_view_checkbox.setFixedHeight(24)
+        trunk_grid.addWidget(self.raw_trunk_view_checkbox, 3, 5, 1, 1)
+        
+        button_layout.addLayout(trunk_grid)
+
+        # === BRANCH & ANALYSIS SECTION ===
+        analysis_label = QLabel("Branch & Analysis")
+        analysis_label.setStyleSheet("font-weight: bold; color: #4CAF50; margin-top: 10px; margin-bottom: 3px;")
+        button_layout.addWidget(analysis_label)
+        
+        branch_grid = QGridLayout()
+        branch_grid.setSpacing(4)
+        
+        self.slice_height_label = QLabel("Slice (cm):")
+        self.slice_height_label.setFixedWidth(65)
+        self.slice_height_label.setStyleSheet("font-size: 10px;")
         self.slice_height_input = QSpinBox()
         self.slice_height_input.setMinimum(5)
         self.slice_height_input.setMaximum(50)
-        self.slice_height_input.setValue(10)
+        self.slice_height_input.setValue(25)
         self.slice_height_input.setSuffix(" cm")
-        self.slice_height_input.setToolTip("Height of each horizontal slice for branch separation")
-        decluster_layout.addWidget(QLabel("Slice Height:"))
-        decluster_layout.addWidget(self.slice_height_input)
-        self.decluster_button = ModernButton("Decluster Branches")
-        self.decluster_button.clicked.connect(self.visualize_height_slices)
-        self.decluster_button.setEnabled(False)
-        self.decluster_button.setToolTip("Separate trunk into horizontal slices for branch analysis")
-        decluster_layout.addWidget(self.decluster_button)
-        self.detect_branches_button = ModernButton("Detect Branches")
+        self.slice_height_input.setFixedWidth(70)
+        self.slice_height_input.setFixedHeight(26)
+        self.slice_height_input.setStyleSheet("font-size: 9px;")
+        self.slice_height_input.setToolTip("Height of each horizontal slice for branch detection")
+
+        self.branch_eps_input = QDoubleSpinBox()
+        self.branch_eps_input.setMinimum(0.01)
+        self.branch_eps_input.setMaximum(5.0)
+        self.branch_eps_input.setSingleStep(0.01)
+        self.branch_eps_input.setDecimals(2)
+        self.branch_eps_input.setValue(0.08)
+        self.branch_eps_input.setSuffix(" m")
+        self.branch_eps_input.setFixedWidth(75)
+        self.branch_eps_input.setFixedHeight(26)
+        self.branch_eps_input.setStyleSheet("font-size: 9px;")
+        self.branch_eps_input.setToolTip("DBSCAN eps radius for branch clustering")
+
+        self.branch_min_samples_input = QSpinBox()
+        self.branch_min_samples_input.setMinimum(1)
+        self.branch_min_samples_input.setMaximum(1000)
+        self.branch_min_samples_input.setValue(3)
+        self.branch_min_samples_input.setFixedWidth(60)
+        self.branch_min_samples_input.setFixedHeight(26)
+        self.branch_min_samples_input.setStyleSheet("font-size: 9px;")
+        self.branch_min_samples_input.setToolTip("Minimum samples for branch DBSCAN")
+
+        self.branch_merge_dist_input = QDoubleSpinBox()
+        self.branch_merge_dist_input.setMinimum(0.01)
+        self.branch_merge_dist_input.setMaximum(5.0)
+        self.branch_merge_dist_input.setSingleStep(0.01)
+        self.branch_merge_dist_input.setDecimals(2)
+        self.branch_merge_dist_input.setValue(0.15)
+        self.branch_merge_dist_input.setSuffix(" m")
+        self.branch_merge_dist_input.setFixedWidth(75)
+        self.branch_merge_dist_input.setFixedHeight(26)
+        self.branch_merge_dist_input.setStyleSheet("font-size: 9px;")
+        self.branch_merge_dist_input.setToolTip("Max centroid distance to merge branch clusters across slices")
+
+        branch_grid.addWidget(QLabel("Slice"), 0, 0)
+        branch_grid.addWidget(self.slice_height_input, 0, 1)
+        branch_grid.addWidget(QLabel("eps"), 0, 2)
+        branch_grid.addWidget(self.branch_eps_input, 0, 3)
+        branch_grid.addWidget(QLabel("minS"), 0, 4)
+        branch_grid.addWidget(self.branch_min_samples_input, 0, 5)
+
+        branch_grid.addWidget(QLabel("merge"), 1, 0)
+        branch_grid.addWidget(self.branch_merge_dist_input, 1, 1)
+        
+        self.detect_branches_button = ModernButton("Detect")
         self.detect_branches_button.clicked.connect(self.detect_branch_clusters_in_slices)
         self.detect_branches_button.setEnabled(False)
+        self.detect_branches_button.setFixedHeight(26)
+        self.detect_branches_button.setStyleSheet("QPushButton { font-size: 10px; padding: 2px 4px; }")
         self.detect_branches_button.setToolTip("Run DBSCAN on each slice to detect individual branches")
-        decluster_layout.addWidget(self.detect_branches_button)
-        button_layout.addLayout(decluster_layout)
 
-        # Add AI Analysis button
+        branch_grid.addWidget(self.detect_branches_button, 1, 2, 1, 2)
+        
+        button_layout.addLayout(branch_grid)
+
+        # === ANALYSIS SECTION ===
+        analysis_label = QLabel("Analysis")
+        analysis_label.setStyleSheet("font-weight: bold; color: #4CAF50; margin-top: 10px; margin-bottom: 3px;")
+        button_layout.addWidget(analysis_label)
+
+        analysis_grid = QGridLayout()
+        analysis_grid.setSpacing(4)
+        
         self.analyze_button = ModernButton("Analyze Tree")
         self.analyze_button.clicked.connect(self.analyze_tree_with_ai)
         self.analyze_button.setEnabled(False)
+        self.analyze_button.setFixedHeight(28)
+        self.analyze_button.setStyleSheet("QPushButton { font-size: 10px; padding: 2px 6px; }")
         self.analyze_button.setToolTip("Use AI to analyze tree structure and segmentation quality")
-        button_layout.addWidget(self.analyze_button)
+        analysis_grid.addWidget(self.analyze_button, 0, 0)
 
-        # Add Batch Analyze button
-        self.batch_analyze_button = ModernButton("Batch Analyze Trunk")
+        self.batch_analyze_button = ModernButton("Batch Analyze")
         self.batch_analyze_button.clicked.connect(self.batch_analyze_trunk_volumes)
         self.batch_analyze_button.setEnabled(False)
+        self.batch_analyze_button.setFixedHeight(28)
+        self.batch_analyze_button.setStyleSheet("QPushButton { font-size: 10px; padding: 2px 6px; }")
         self.batch_analyze_button.setToolTip("Analyze all trees in list: visualize trunk → select all points → calculate volume → save")
-        button_layout.addWidget(self.batch_analyze_button)
+        analysis_grid.addWidget(self.batch_analyze_button, 0, 1)
+        
+        button_layout.addLayout(analysis_grid)
+
+        # === UTILITY SECTION ===
+        utility_label = QLabel("Utilities")
+        utility_label.setStyleSheet("font-weight: bold; color: #4CAF50; margin-top: 10px; margin-bottom: 3px;")
+        button_layout.addWidget(utility_label)
+        
+        utility_grid = QGridLayout()
+        utility_grid.setSpacing(4)
+
+        self.crown_polygon_button = ModernButton("Crown Polygon")
+        self.crown_polygon_button.clicked.connect(self.create_tree_crown_polygon)
+        self.crown_polygon_button.setEnabled(False)
+        self.crown_polygon_button.setFixedHeight(28)
+        self.crown_polygon_button.setStyleSheet("QPushButton { font-size: 10px; padding: 2px 6px; }")
+        self.crown_polygon_button.setToolTip("Create 2D polygon from all tree points projected to XY plane")
+        utility_grid.addWidget(self.crown_polygon_button, 0, 0)
+
+        self.fit_to_screen_button = ModernButton("Fit View")
+        self.fit_to_screen_button.clicked.connect(self.fit_to_screen)
+        self.fit_to_screen_button.setEnabled(False)
+        self.fit_to_screen_button.setFixedHeight(28)
+        self.fit_to_screen_button.setStyleSheet("QPushButton { font-size: 10px; padding: 2px 6px; }")
+        self.fit_to_screen_button.setToolTip("Reset camera to fit all visible objects in the view")
+        utility_grid.addWidget(self.fit_to_screen_button, 0, 1)
 
         self.clear_button = ModernButton("Clear View")
         self.clear_button.clicked.connect(self.clear_plot)
+        self.clear_button.setFixedHeight(28)
+        self.clear_button.setStyleSheet("QPushButton { font-size: 10px; padding: 2px 6px; }")
         self.clear_button.setToolTip("Clear the 3D view and reset to default colors (removes cluster highlighting)")
-        button_layout.addWidget(self.clear_button)
+        utility_grid.addWidget(self.clear_button, 0, 2)
 
         self.save_button = ModernButton("Save LAS")
         self.save_button.clicked.connect(self.save_las_file)
         self.save_button.setEnabled(False)
-        button_layout.addWidget(self.save_button)
+        self.save_button.setFixedHeight(28)
+        self.save_button.setStyleSheet("QPushButton { font-size: 10px; padding: 2px 6px; }")
+        utility_grid.addWidget(self.save_button, 1, 0, 1, 3)
+        
+        button_layout.addLayout(utility_grid)
 
         # Remove the reset view button since clear_plot already resets the camera
         # self.reset_view_button = ModernButton("Reset View")
@@ -1126,6 +1596,11 @@ class TreeVisualizerGUI(QMainWindow):
             self.log_to_console(f"📊 File read: {num_points:,} points, {file_size_mb:.1f} MB in {read_time:.2f}s")
             
             self.file_label.setText(f"Loaded: {os.path.basename(file_path)}")
+            # Remember the current LAS file path for automatic saves
+            try:
+                self.current_las_path = file_path
+            except Exception:
+                self.current_las_path = None
 
             # Check for ITC field
             if 'itc' not in self.las_data.point_format.dimension_names:
@@ -1350,11 +1825,70 @@ class TreeVisualizerGUI(QMainWindow):
             # Reset camera and add title
             self.plotter.reset_camera()
             num_points = len(self.current_tree_points)
-            self.plotter.add_text(f"Tree ID: {self.current_tree_id} ({num_points} points) - Color: {color_field}",
-                                 position='upper_left', font_size=12, color='#FFFFFF')
+            try:
+                self.plotter.remove_actor('tree_info_text')
+            except Exception:
+                pass
+
+            self.plotter.add_text(
+                f"Tree ID: {self.current_tree_id} ({num_points} points) - Color: {color_field}",
+                position='lower_left',
+                font_size=12,
+                color='#FFFFFF',
+                name='tree_info_text'
+            )
             # Update instruction text
             self.plotter.add_text("Click on points to see ITC values", position='upper_right', 
                                 font_size=10, color='#FFFFFF')
+            # Print trunk/branch summary table to GUI console and python console
+            try:
+                # Prefer trunk_volume_summary if present
+                if hasattr(self, 'trunk_volume_summary') and self.trunk_volume_summary:
+                    overall_total = sum(t['total_volume'] for t in self.trunk_volume_summary.values())
+                    total_trunks = len(self.trunk_volume_summary)
+                    header = f"{'Trunk':<8} {'Volume_m3':>12} {'#Branches':>10} {'#Points':>10}"
+                    self.log_to_console('\n' + header)
+                    print(header)
+                    self.log_to_console('-' * len(header))
+                    print('-' * len(header))
+                    for tid in sorted(self.trunk_volume_summary.keys()):
+                        t = self.trunk_volume_summary[tid]
+                        row = f"{tid:<8} {t['total_volume']:12.4f} {t['num_branches']:10d} {t['total_points']:10d}"
+                        self.log_to_console(row)
+                        print(row)
+                    footer = f"Total trunks: {total_trunks} | Overall volume: {overall_total:.4f} m³"
+                    self.log_to_console(footer)
+                    print(footer)
+                else:
+                    # Aggregate from accumulated_volume_sections if trunk_summary missing
+                    trunk_agg = {}
+                    for sec in self.accumulated_volume_sections:
+                        tid = sec.get('trunk_id', None)
+                        if tid is None:
+                            tid = -1
+                        rec = trunk_agg.setdefault(tid, {'total_volume': 0.0, 'num_branches': 0, 'total_points': 0})
+                        rec['total_volume'] += float(sec.get('volume', 0.0) or 0.0)
+                        rec['num_branches'] += 1
+                        rec['total_points'] += len(sec.get('points', []))
+
+                    header = f"{'Trunk':<8} {'Volume_m3':>12} {'#Sections':>10} {'#Points':>10}"
+                    self.log_to_console('\n' + header)
+                    print(header)
+                    self.log_to_console('-' * len(header))
+                    print('-' * len(header))
+                    for tid in sorted(trunk_agg.keys()):
+                        rec = trunk_agg[tid]
+                        row = f"{tid:<8} {rec['total_volume']:12.4f} {rec['num_branches']:10d} {rec['total_points']:10d}"
+                        self.log_to_console(row)
+                        print(row)
+                    overall = sum(r['total_volume'] for r in trunk_agg.values())
+                    footer = f"Total trunks (keys): {len(trunk_agg)} | Overall volume: {overall:.4f} m³"
+                    self.log_to_console(footer)
+                    print(footer)
+            except Exception as e:
+                self.log_to_console(f"⚠️ Error building trunk summary table: {e}")
+                print(f"Error building trunk summary table: {e}")
+
             self.plotter.update()
         except Exception as e:
             print(f"Error in update_tree_colors: {str(e)}")
@@ -1394,6 +1928,23 @@ class TreeVisualizerGUI(QMainWindow):
         try:
             # Clear accumulated volume results when visualizing new trees
             self.clear_accumulated_volume()
+            # Reset any prior selection/analysis state to avoid index mismatches
+            try:
+                self.selected_point_indices = None
+            except Exception:
+                pass
+            try:
+                self.branch_assignment = None
+            except Exception:
+                pass
+            try:
+                self.trunk_assignment = None
+            except Exception:
+                pass
+            try:
+                self.last_analyzed_points = None
+            except Exception:
+                pass
 
             # Extract and merge points for all selected trees
             all_points = []
@@ -1497,6 +2048,22 @@ class TreeVisualizerGUI(QMainWindow):
                 bounding_box = pv.Cube(bounds=bounds)
                 self.plotter.add_mesh(bounding_box, color='black', style='wireframe', line_width=2,
                                     label='Tree Bounding Box')
+                # Display bounding box height as overlay text and a 3D label at the top center
+                try:
+                    bottom_z = bounds[4]
+                    top_z = bounds[5]
+                    bounding_box_height = top_z - bottom_z
+                    # Add overlay text (upper right)
+                    self.plotter.add_text(f"BBox H: {bounding_box_height:.2f} m", position='upper_right', font_size=12, color='#FFFFFF')
+                    # Add a 3D label at the top-center of the bounding box
+                    top_center = ((bounds[0] + bounds[1]) / 2.0, (bounds[2] + bounds[3]) / 2.0, top_z)
+                    try:
+                        self.plotter.add_point_labels(np.array([top_center]), [f"{bounding_box_height:.2f} m"], point_size=0, font_size=10, text_color='yellow')
+                    except Exception:
+                        # Fallback: use add_point_labels without numpy array conversion if needed
+                        self.plotter.add_point_labels([top_center], [f"{bounding_box_height:.2f} m"], point_size=0, font_size=10, text_color='yellow')
+                except Exception as e:
+                    print(f"Warning: Failed to add bounding box height label: {e}")
 
             # Enable analyze button for tree analysis
             self.analyze_button.setEnabled(True)
@@ -1504,9 +2071,6 @@ class TreeVisualizerGUI(QMainWindow):
             # Enable polygon selection buttons
             self.draw_polygon_button.setEnabled(True)
             self.select_all_points_button.setEnabled(True)
-
-            # Disable split detection for multiple tree visualization
-            self.split_button.setEnabled(False)
 
             # Check volume folder for existing volume data if enabled (after visualization is complete)
             if (hasattr(self, 'volume_folder_checkbox') and 
@@ -1603,6 +2167,24 @@ class TreeVisualizerGUI(QMainWindow):
             self.current_mask = merged_mask
             self.all_masks = all_masks
 
+            # Reset any prior selection/analysis state to avoid using indices from previous visualizations
+            try:
+                self.selected_point_indices = None
+            except Exception:
+                pass
+            try:
+                self.branch_assignment = None
+            except Exception:
+                pass
+            try:
+                self.trunk_assignment = None
+            except Exception:
+                pass
+            try:
+                self.last_analyzed_points = None
+            except Exception:
+                pass
+
             # For trunk visualization, use default green
             self.current_color_values = None
             self.current_color_field = "Default (green)"
@@ -1620,14 +2202,31 @@ class TreeVisualizerGUI(QMainWindow):
             self.update_tree_colors(self.color_combo.currentText())
 
             # Enable split detection button for merged trunks
-            self.split_button.setEnabled(True)
             self.analyze_button.setEnabled(True)
-            self.decluster_button.setEnabled(True)
             self.detect_branches_button.setEnabled(True)
+            self.detect_trunks_button.setEnabled(True)  # Enable trunk detection after trunk visualization
 
             # Enable polygon selection buttons
             self.draw_polygon_button.setEnabled(True)
             self.select_all_points_button.setEnabled(True)
+
+            # Reset any prior selection/analysis state to avoid index mismatches
+            try:
+                self.selected_point_indices = None
+            except Exception:
+                pass
+            try:
+                self.branch_assignment = None
+            except Exception:
+                pass
+            try:
+                self.trunk_assignment = None
+            except Exception:
+                pass
+            try:
+                self.last_analyzed_points = None
+            except Exception:
+                pass
 
         except Exception as e:
             print(f"Error in visualize_trunk: {str(e)}")
@@ -1778,782 +2377,201 @@ class TreeVisualizerGUI(QMainWindow):
             QMessageBox.critical(self, "Error", f"Failed to create tree crown polygon: {str(e)}")
 
 
-
-    def analyze_splits(self):
-        """Analyze split detection on the currently visualized trunk points."""
-        if self.current_tree_points is None or len(self.current_tree_points) == 0:
-            print("Warning: No trunk points available for split analysis")
-            QMessageBox.warning(self, "Warning", "No trunk points available for split analysis.")
+    def refresh_color_combo_box(self):
+        """Refresh the color combo box to include newly added scalar fields like DBH points."""
+        if self.las_data is None:
             return
 
         try:
-            # Run split detection analysis on trunk points
-            results = self.analyze_trunk_splits(self.current_tree_points)
+            # Get current selection
+            current_selection = self.color_combo.currentText()
 
-            # Show interactive visualization for ALL height levels (not just branching)
-            self.interactive_cluster_visualization(results)
+            # Temporarily disconnect the signal to avoid triggering update_tree_colors with empty field
+            self.color_combo.currentTextChanged.disconnect(self.update_tree_colors)
 
-            # Display results in a message box
-            self.show_split_results(results)
+            # Populate color field combo box with updated fields
+            available_fields = list(self.las_data.point_format.dimension_names)
+            color_fields = [field for field in available_fields
+                           if field not in ['x', 'y', 'z']]  # Include itc for multiple tree coloring
 
-        except Exception as e:
-            print(f"Error in analyze_splits: {str(e)}")
-            QMessageBox.critical(self, "Error", f"Split analysis failed: {str(e)}")
+            self.color_combo.clear()
+            self.color_combo.addItem("Default (green)")
+            for field in sorted(color_fields):
+                self.color_combo.addItem(field)
 
-    def analyze_trunk_splits(self, trunk_points: np.ndarray):
-        """
-        Analyze split detection on trunk points using height-wise clustering.
-
-        Args:
-            trunk_points: Nx3 array of trunk points
-
-        Returns:
-            List of analysis results for each height, including cluster data for visualization
-        """
-        print("Analyzing trunk splits...")
-
-        # Get parameters from UI inputs
-        try:
-            max_height = float(self.max_height_input.text())
-            step = float(self.step_input.text())
-            thickness = float(self.thickness_input.text())
-            min_samples = int(self.min_points_input.text())
-            
-            # Validate parameters
-            if max_height <= 0 or max_height > 50:
-                raise ValueError("Max height must be between 0.1 and 50 meters")
-            if step <= 0 or step > max_height:
-                raise ValueError("Step must be between 0.01 and max height")
-            if thickness <= 0 or thickness > 1:
-                raise ValueError("Thickness must be between 0.01 and 1 meter")
-            if min_samples < 2 or min_samples > 20:
-                raise ValueError("Min points must be between 2 and 20")
-                
-        except ValueError as e:
-            print(f"Error validating split detection parameters: {str(e)}")
-            QMessageBox.warning(self, "Invalid Parameters", 
-                              f"Please enter valid values for split detection parameters.\nError: {e}")
-            return
-
-        try:
-            # DBSCAN eps parameter (fixed for now, could add UI control later)
-            eps = 0.2
-
-            min_z = np.min(trunk_points[:, 2])
-            heights = np.arange(0.0, min(max_height, np.max(trunk_points[:, 2]) - min_z) + step, step)
-            results = []
-
-            for height in heights:
-                target_z = min_z + height
-
-                # Extract plane cut
-                lower_bound = target_z - thickness/2
-                upper_bound = target_z + thickness/2
-                mask = (trunk_points[:, 2] >= lower_bound) & (trunk_points[:, 2] <= upper_bound)
-                plane_points = trunk_points[mask]
-
-                if len(plane_points) < min_samples:
-                    results.append({
-                        'height': height,
-                        'n_points': len(plane_points),
-                        'n_clusters': 0,
-                        'n_noise': len(plane_points),
-                        'cluster_sizes': [],
-                        'plane_points': plane_points,
-                        'labels': np.array([]),
-                        'cluster_centers': []
-                    })
-                    continue
-
-                # Extract 2D coordinates for clustering
-                plane_points_2d = plane_points[:, :2]
-
-                # Apply DBSCAN clustering
-                clustering = DBSCAN(eps=eps, min_samples=min_samples).fit(plane_points_2d)
-                labels = clustering.labels_
-
-                # Count clusters (excluding noise labeled -1)
-                n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-                n_noise = list(labels).count(-1)
-
-                # Get cluster sizes and centers
-                cluster_sizes = []
-                cluster_centers = []
-                cluster_circles = []  # Store fitted circles for each cluster
-                for label in set(labels):
-                    if label != -1:
-                        cluster_mask = labels == label
-                        cluster_sizes.append(np.sum(cluster_mask))
-                        cluster_center = np.mean(plane_points_2d[cluster_mask], axis=0)
-                        cluster_centers.append(cluster_center)
-                        
-                        # Fit circle to cluster points
-                        cluster_points = plane_points_2d[cluster_mask]
-                        circle_params = self.fit_circle_to_points(cluster_points)
-                        cluster_circles.append(circle_params)
-
-                # Check circle sizes and merge if not within 80% of each other
-                merged_clusters = False
-                if len(cluster_circles) > 1:
-                    radii = [circle['radius'] for circle in cluster_circles if circle is not None]
-                    centers = [circle['center'] for circle in cluster_circles if circle is not None]
-                    
-                    if len(radii) > 1:
-                        max_radius = max(radii)
-                        min_radius = min(radii)
-                        
-                        # Check if circles overlap
-                        circles_overlap = False
-                        for i in range(len(centers)):
-                            for j in range(i+1, len(centers)):
-                                center1 = np.array(centers[i])
-                                center2 = np.array(centers[j])
-                                distance = np.linalg.norm(center1 - center2)
-                                if distance < (radii[i] + radii[j]):
-                                    circles_overlap = True
-                                    break
-                            if circles_overlap:
-                                break
-                        
-                        # If circles are not within 80% of each other (smaller circle < 80% of larger) OR they overlap, merge all clusters
-                        percentage = (min_radius / max_radius) * 100 if max_radius > 0 else 0
-                        if percentage < 80 or circles_overlap:
-                            merged_clusters = True
-                            merge_reason = "overlapping circles" if circles_overlap else f"smaller circle is {percentage:.1f}% of larger"
-                            print(f"Merging {len(cluster_circles)} clusters at height {height:.2f}m ({merge_reason})")
-                            
-                            # Combine all cluster points into one
-                            all_cluster_points = []
-                            for label in set(labels):
-                                if label != -1:
-                                    cluster_mask = labels == label
-                                    cluster_points = plane_points_2d[cluster_mask]
-                                    all_cluster_points.extend(cluster_points)
-                            
-                            all_cluster_points = np.array(all_cluster_points)
-                            
-                            # Fit single circle to all combined points
-                            combined_circle = self.fit_circle_to_points(all_cluster_points)
-                            
-                            # Update results for merged clusters
-                            cluster_sizes = [len(all_cluster_points)]
-                            cluster_centers = [np.mean(all_cluster_points, axis=0)]
-                            cluster_circles = [combined_circle]
-                            n_clusters = 1
-                            
-                            # Update labels to treat all as one cluster
-                            labels = np.where(labels != -1, 0, -1)
-
-                results.append({
-                    'height': height,
-                    'n_points': len(plane_points),
-                    'n_clusters': n_clusters,
-                    'n_noise': n_noise,
-                    'cluster_sizes': cluster_sizes,
-                    'plane_points': plane_points,
-                    'labels': labels,
-                    'cluster_centers': cluster_centers,
-                    'cluster_circles': cluster_circles,
-                    'merged_clusters': merged_clusters,
-                    'merge_reason': merge_reason if merged_clusters else None
-                })
-
-            print(f"Split analysis completed for {len(heights)} height levels")
-            return results
-
-        except Exception as e:
-            print(f"Error in analyze_trunk_splits: {str(e)}")
-            raise
-
-    def fit_circle_to_points(self, points):
-        """
-        Fit a circle to a set of 2D points using least squares optimization.
-        
-        Args:
-            points: Nx2 array of (x, y) coordinates
-            
-        Returns:
-            Dictionary with circle parameters: {'center': (x, y), 'radius': r}
-        """
-        if len(points) < 3:
-            # Not enough points for circle fitting, return centroid and average distance
-            center = np.mean(points, axis=0)
-            distances = np.linalg.norm(points - center, axis=1)
-            radius = np.mean(distances)
-            return {'center': center, 'radius': radius}
-        
-        try:
-            from scipy.optimize import minimize
-            
-            # Initial guess: centroid and average distance to centroid
-            x_mean, y_mean = np.mean(points, axis=0)
-            distances = np.linalg.norm(points - np.array([x_mean, y_mean]), axis=1)
-            r_guess = np.mean(distances)
-            
-            def circle_residuals(params):
-                """Calculate residuals for circle fitting."""
-                x_c, y_c, r = params
-                distances = np.sqrt((points[:, 0] - x_c)**2 + (points[:, 1] - y_c)**2)
-                return np.sum((distances - r)**2)
-            
-            # Optimize circle parameters
-            result = minimize(circle_residuals, [x_mean, y_mean, r_guess], 
-                            method='L-BFGS-B', 
-                            bounds=[(None, None), (None, None), (0.01, None)])
-            
-            if result.success:
-                x_c, y_c, r = result.x
-                return {'center': np.array([x_c, y_c]), 'radius': r}
-            else:
-                # Fallback to simple method
-                center = np.mean(points, axis=0)
-                distances = np.linalg.norm(points - center, axis=1)
-                radius = np.mean(distances)
-                return {'center': center, 'radius': radius}
-                
-        except ImportError:
-            # Fallback if scipy not available
-            center = np.mean(points, axis=0)
-            distances = np.linalg.norm(points - center, axis=1)
-            radius = np.mean(distances)
-            return {'center': center, 'radius': radius}
-
-    def interactive_cluster_visualization(self, all_results):
-        """
-        Show interactive 2D cluster visualization for each height level.
-
-        Args:
-            all_results: List of all analysis results for each height
-        """
-        if not all_results:
-            QMessageBox.information(self, "No Results", 
-                                  "No analysis results available.")
-            return
-
-        # Create dialog for interactive visualization
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Interactive Cluster Visualization - All Heights")
-        dialog.setModal(False)  # Allow interaction with main window
-        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowType.WindowStaysOnTopHint)  # Don't force on top
-        dialog.resize(1000, 700)  # Made slightly larger for toolbar
-
-        # Create layout
-        layout = QVBoxLayout(dialog)
-
-        # Create matplotlib figure with navigation toolbar
-        self.cluster_fig = plt.figure(figsize=(10, 8))
-        self.cluster_ax = self.cluster_fig.add_subplot(111)
-        self.cluster_canvas = FigureCanvas(self.cluster_fig)
-        
-        # Add navigation toolbar for zoom/pan functionality
-        from matplotlib.backends.backend_qt5 import NavigationToolbar2QT
-        self.nav_toolbar = NavigationToolbar2QT(self.cluster_canvas, dialog)
-        
-        layout.addWidget(self.nav_toolbar)
-        layout.addWidget(self.cluster_canvas)
-
-        # Info label with interaction instructions
-        self.cluster_info_label = QLabel()
-        self.cluster_info_label.setStyleSheet("font-weight: bold; color: #666;")
-        layout.addWidget(self.cluster_info_label)
-
-        # Navigation buttons
-        button_layout = QHBoxLayout()
-
-        self.prev_button = QPushButton("Previous")
-        self.prev_button.clicked.connect(lambda: self.show_cluster_at_index(self.current_cluster_index - 1, all_results))
-        button_layout.addWidget(self.prev_button)
-
-        self.next_button = QPushButton("Next")
-        self.next_button.clicked.connect(lambda: self.show_cluster_at_index(self.current_cluster_index + 1, all_results))
-        button_layout.addWidget(self.next_button)
-
-        close_button = QPushButton("Close")
-        close_button.clicked.connect(dialog.accept)
-        button_layout.addWidget(close_button)
-
-        layout.addLayout(button_layout)
-
-        # Initialize with first result
-        self.current_cluster_index = 0
-        self.show_cluster_at_index(0, all_results)
-
-        # Update button states
-        self.update_navigation_buttons(all_results)
-
-        dialog.exec_()
-
-        # After closing the 2D dialog, visualize split planes in the main 3D view
-        self.visualize_split_planes(all_results)
-
-        # Keep the last viewed cluster highlighting instead of resetting
-        # The 3D view will maintain the cluster colors for the last viewed height
-
-    def show_cluster_at_index(self, index, all_results):
-        """Show the cluster visualization for the specified index."""
-        if index < 0 or index >= len(all_results):
-            return
-
-        result = all_results[index]
-        self.current_cluster_index = index
-
-        # Clear previous plot
-        self.cluster_ax.clear()
-
-        # Get 2D points and labels
-        plane_points = result['plane_points']
-        labels = result['labels']
-
-        if len(plane_points) == 0:
-            self.cluster_ax.text(0.5, 0.5, 'No points at this height', 
-                               ha='center', va='center', transform=self.cluster_ax.transAxes)
-        else:
-            # Extract 2D coordinates
-            x_coords = plane_points[:, 0]
-            y_coords = plane_points[:, 1]
-
-            # Only add legend if there are labeled artists
-            legend_handles = []
-            unique_labels = set(labels)
-            colors = plt.cm.rainbow(np.linspace(0, 1, len(unique_labels)))
-            for i, label in enumerate(unique_labels):
-                if label == -1:
-                    # Noise points
-                    mask = labels == label
-                    if np.any(mask):
-                        scatter = self.cluster_ax.scatter(x_coords[mask], y_coords[mask], 
-                                                      c='black', alpha=0.5, s=20, label='Noise')
-                        legend_handles.append(scatter)
+            # Restore previous selection if it still exists
+            if current_selection and current_selection != "Default (green)":
+                index = self.color_combo.findText(current_selection)
+                if index >= 0:
+                    self.color_combo.setCurrentIndex(index)
                 else:
-                    # Cluster points
-                    mask = labels == label
-                    if np.any(mask):
-                        scatter = self.cluster_ax.scatter(x_coords[mask], y_coords[mask], 
-                                                      c=[colors[i]], alpha=0.7, s=30, 
-                                                      label=f'Cluster {label} ({np.sum(mask)} points)')
-                        legend_handles.append(scatter)
+                    # If previous selection no longer exists, select DBH points if available
+                    dbh_index = self.color_combo.findText("dbh_points")
+                    if dbh_index >= 0:
+                        self.color_combo.setCurrentIndex(dbh_index)
+                        self.log_to_console("🎨 Switched to 'dbh_points' coloring")
 
-            # Plot cluster centers if available
-            if result['cluster_centers']:
-                centers = np.array(result['cluster_centers'])
-                scatter_centers = self.cluster_ax.scatter(centers[:, 0], centers[:, 1], 
-                                                      c='red', marker='x', s=100, linewidth=3, 
-                                                      label='Cluster Centers')
-                legend_handles.append(scatter_centers)
+            # Reconnect the signal
+            self.color_combo.currentTextChanged.connect(self.update_tree_colors)
 
-            # Plot fitted circles for each cluster
-            if 'cluster_circles' in result and result['cluster_circles']:
-                for i, circle_params in enumerate(result['cluster_circles']):
-                    if circle_params:
-                        center = circle_params['center']
-                        radius = circle_params['radius']
-                        
-                        # Create circle patch
-                        circle_patch = plt.Circle(center, radius, fill=False, 
-                                                color=colors[i % len(colors)], 
-                                                linewidth=2, linestyle='--',
-                                                alpha=0.8, label=f'Cluster {i} Circle (r={radius:.2f}m)')
-                        self.cluster_ax.add_patch(circle_patch)
-                        
-                        # Add circle center marker
-                        self.cluster_ax.scatter([center[0]], [center[1]], 
-                                              color=colors[i % len(colors)], marker='o', 
-                                              s=50, edgecolors='black', linewidth=2,
-                                              label=f'Cluster {i} Circle Center')
+            self.log_to_console("✅ Color options updated - 'dbh_points' now available for coloring")
 
-            # Add legend only if we have handles
-            if legend_handles:
-                self.cluster_ax.legend()
-            self.cluster_ax.set_xlabel('X Coordinate')
-            self.cluster_ax.set_ylabel('Y Coordinate')
-            self.cluster_ax.set_title('.2f')
-            self.cluster_ax.grid(True, alpha=0.3)
+        except Exception as e:
+            # Make sure to reconnect the signal even if there's an error
+            try:
+                self.color_combo.currentTextChanged.connect(self.update_tree_colors)
+            except:
+                pass
+            self.log_to_console(f"⚠️ Could not refresh color combo box: {str(e)}")
 
-        # Update info label
-        interaction_note = "💡 Use toolbar to zoom/pan 2D plot. Circles show fitted cluster boundaries. Interact with 3D view simultaneously."
-        if result.get('merged_clusters', False):
-            merge_reason = result.get('merge_reason', 'size differences or overlapping circles')
-            merged_note = f"🔄 Clusters merged due to: {merge_reason}"
-        else:
-            merged_note = ""
-        info_text = f"Height: {result['height']:.2f}m | Points: {result['n_points']} | " \
-                   f"Clusters: {result['n_clusters']} | Noise: {result['n_noise']}\n" \
-                   f"Height #{index + 1} of {len(all_results)}\n" \
-                   f"{interaction_note}\n" \
-                   f"{merged_note}"
-        self.cluster_info_label.setText(info_text)
 
-        # Redraw canvas
-        self.cluster_canvas.draw()
+    def view_neighbors(self):
+        """Find and visualize neighboring trees within the specified radius."""
+        if self.las_data is None:
+            print("Error: No LAS file loaded")
+            QMessageBox.warning(self, "Warning", "No LAS file loaded.")
+            return
 
-        # Update navigation buttons
-        self.update_navigation_buttons(all_results)
-
-        # Highlight corresponding points in 3D visualization
-        self.highlight_3d_clusters(result)
-
-    def update_navigation_buttons(self, all_results):
-        """Update the state of navigation buttons."""
-        self.prev_button.setEnabled(self.current_cluster_index > 0)
-        self.next_button.setEnabled(self.current_cluster_index < len(all_results) - 1)
-
-    def highlight_3d_clusters(self, result):
-        """Highlight the cluster points in the 3D visualization."""
-        if not self.plotter or self.current_tree_points is None:
+        selected_tree_ids = self.get_selected_tree_ids()
+        if not selected_tree_ids:
+            print("Warning: No trees selected for neighbor search")
+            QMessageBox.warning(self, "Warning", "Please select one or more trees first.")
             return
 
         try:
-            # Clear previous cluster highlighting
-            self.plotter.remove_actor('cluster_highlighted_points')
-            self.plotter.remove_actor('cluster_other_points')
+            radius = float(self.neighbor_radius_input.text())
+            if radius <= 0 or radius > 1000:
+                raise ValueError("Radius must be between 0.1 and 1000 meters")
+        except ValueError as e:
+            print(f"Error: Invalid radius value: {str(e)}")
+            QMessageBox.warning(self, "Invalid Radius", f"Please enter a valid radius.\nError: {e}")
+            return
 
-            # Get the height and thickness for the current slice
-            height = result['height']
-            thickness = float(self.thickness_input.text())
-            min_z = np.min(self.current_tree_points[:, 2])
-            target_z = min_z + height
+        try:
+            # Ensure centroids are pre-computed (lazy loading)
+            if not self.tree_centroids_cache:
+                print("Pre-computing tree centroids for neighbor search...")
+                self.progress_bar.setVisible(True)
+                self.progress_bar.setRange(0, 0)  # Indeterminate progress
+                self.precompute_tree_centroids()
+                self.progress_bar.setVisible(False)
+                print("Centroid pre-computation completed")
 
-            # Define the height range for this slice
-            lower_bound = target_z - thickness/2
-            upper_bound = target_z + thickness/2
-
-            # Find points in this height slice
-            height_mask = (self.current_tree_points[:, 2] >= lower_bound) & \
-                         (self.current_tree_points[:, 2] <= upper_bound)
-
-            if not np.any(height_mask):
+            # Calculate centroid of selected trees
+            reference_centroid = self.calculate_trees_centroid(selected_tree_ids)
+            if reference_centroid is None:
+                print("Error: Could not calculate centroid of selected trees")
+                QMessageBox.warning(self, "Error", "Could not calculate centroid of selected trees.")
                 return
 
-            # Get cluster labels for points in this slice
-            slice_points = self.current_tree_points[height_mask]
-            slice_labels = result['labels']
+            print(f"Reference centroid: ({reference_centroid[0]:.2f}, {reference_centroid[1]:.2f})")
 
-            # Create colors for clusters (matching 2D visualization)
-            unique_labels = set(slice_labels)
-            n_clusters = len(unique_labels) - (1 if -1 in unique_labels else 0)
-
-            if n_clusters > 0:
-                # Use same color scheme as 2D plot
-                colors = plt.cm.rainbow(np.linspace(0, 1, len(unique_labels)))
-
-                # Create color array for all slice points
-                point_colors = np.zeros((len(slice_points), 3))
-
-                for i, label in enumerate(unique_labels):
-                    if label == -1:
-                        # Noise points - gray
-                        mask = slice_labels == label
-                        point_colors[mask] = [0.5, 0.5, 0.5]  # Gray
-                    else:
-                        # Cluster points - rainbow colors
-                        mask = slice_labels == label
-                        rgb = colors[i][:3]  # Get RGB values
-                        point_colors[mask] = rgb
-
-                # Create point cloud for highlighted slice
-                highlighted_cloud = pv.PolyData(slice_points)
-                self.plotter.add_points(highlighted_cloud, scalars=point_colors,
-                                      rgb=True, point_size=6, render_points_as_spheres=True,
-                                      name='cluster_highlighted_points')
-
-            # Show remaining trunk points in subdued color
-            other_mask = ~height_mask
-            if np.any(other_mask):
-                other_points = self.current_tree_points[other_mask]
-                other_cloud = pv.PolyData(other_points)
-                self.plotter.add_points(other_cloud, color='#404040',  # Dark gray
-                                      point_size=2, render_points_as_spheres=False,
-                                      name='cluster_other_points')
-
-            # Add fitted circles in 3D at the current height level
-            if 'cluster_circles' in result and result['cluster_circles']:
-                for i, circle_params in enumerate(result['cluster_circles']):
-                    if circle_params:
-                        center_2d = circle_params['center']
-                        radius = circle_params['radius']
-                        
-                        # Create 3D circle at the current height
-                        # Use parametric equation for circle
-                        theta = np.linspace(0, 2*np.pi, 50)
-                        x_circle = center_2d[0] + radius * np.cos(theta)
-                        y_circle = center_2d[1] + radius * np.sin(theta)
-                        z_circle = np.full_like(theta, target_z)  # At the slice height
-                        
-                        # Create circle points
-                        circle_points_3d = np.column_stack([x_circle, y_circle, z_circle])
-                        circle_cloud = pv.PolyData(circle_points_3d)
-                        
-                        # Use same color as 2D plot
-                        color_rgb = colors[i % len(colors)][:3]
-                        
-                        # Add circle as line loop
-                        lines = []
-                        for j in range(len(circle_points_3d)):
-                            lines.extend([circle_points_3d[j], circle_points_3d[(j+1) % len(circle_points_3d)]])
-                        
-                        if lines:
-                            lines_array = np.array(lines)
-                            self.plotter.add_lines(lines_array, color=color_rgb, width=3,
-                                                 name=f'cluster_circle_{i}')
-
-            # Update plot
-            self.plotter.update()
-
-        except Exception as e:
-            print(f"Error highlighting 3D clusters: {str(e)}")
-            # Fallback: just show all points in default color
-            try:
-                self.plotter.remove_actor('cluster_highlighted_points')
-                self.plotter.remove_actor('cluster_other_points')
-                point_cloud = pv.PolyData(self.current_tree_points)
-                self.plotter.add_points(point_cloud, color='#4CAF50', point_size=2,
-                                      render_points_as_spheres=False, name='cluster_highlighted_points')
-                self.plotter.update()
-            except:
-                pass
-
-    def reset_3d_visualization(self):
-        """Reset the 3D visualization to default colors."""
-        if not self.plotter or self.current_tree_points is None:
-            return
-
-        try:
-            # Clear cluster highlighting actors
-            self.plotter.remove_actor('cluster_highlighted_points')
-            self.plotter.remove_actor('cluster_other_points')
+            # Find neighboring trees using KDTree for fast spatial queries
+            neighbor_tree_ids = list(selected_tree_ids)  # Start with selected trees
             
-            # Clear circle actors
-            for i in range(10):  # Clear up to 10 circle actors
-                try:
-                    self.plotter.remove_actor(f'cluster_circle_{i}')
-                except:
-                    pass
+            # Get centroids for all trees (excluding selected ones)
+            all_centroids = []
+            candidate_tree_ids = []
+            
+            for tree_id in self.unique_itc_values:
+                if tree_id not in selected_tree_ids and tree_id in self.tree_centroids_cache:
+                    all_centroids.append(self.tree_centroids_cache[tree_id])
+                    candidate_tree_ids.append(tree_id)
+            
+            if self.centroids_kdtree is not None and all_centroids:
+                # Use KDTree for efficient radius search
+                indices = self.centroids_kdtree.query_ball_point(reference_centroid, radius)
+                neighbor_tree_ids.extend([candidate_tree_ids[i] for i in indices])
+            elif all_centroids:
+                # Fallback to vectorized distance calculation if KDTree not available
+                centroids_array = np.array(all_centroids)
+                reference_centroid_array = np.array([reference_centroid])
+                
+                # Calculate distances using scipy's cdist for efficiency
+                distances = cdist(reference_centroid_array, centroids_array)[0]
+                
+                # Find trees within radius
+                within_radius = distances <= radius
+                neighbor_tree_ids.extend([candidate_tree_ids[i] for i in np.where(within_radius)[0]])
+            
+            # Fallback for any trees not in cache (shouldn't happen with precomputation)
+            for tree_id in self.unique_itc_values:
+                if tree_id in selected_tree_ids or tree_id in neighbor_tree_ids:
+                    continue
+                    
+                # Calculate centroid (fallback)
+                tree_centroid = self.calculate_tree_centroid(tree_id)
+                if tree_centroid is None:
+                    continue
 
-            # Restore default visualization
-            self.update_tree_colors(self.color_combo.currentText())
+                # Check distance
+                distance = np.sqrt((tree_centroid[0] - reference_centroid[0])**2 + 
+                                 (tree_centroid[1] - reference_centroid[1])**2)
+
+                if distance <= radius:
+                    neighbor_tree_ids.append(tree_id)
+
+            if len(neighbor_tree_ids) == len(selected_tree_ids):
+                print(f"Warning: No additional neighbors found within {radius}m radius")
+                QMessageBox.information(self, "No Neighbors", f"No additional trees found within {radius}m radius.")
+                return
+
+            print(f"Found {len(neighbor_tree_ids)} trees within {radius}m radius (including {len(selected_tree_ids)} selected)")
+
+            # Select the neighbor trees in the list
+            self.tree_list.clearSelection()
+            for i in range(self.tree_list.count()):
+                item = self.tree_list.item(i)
+                try:
+                    tree_id = int(item.text())
+                    if tree_id in neighbor_tree_ids:
+                        item.setSelected(True)
+                except ValueError:
+                    continue
+
+            # Trigger visualization
+            self.visualize_tree()
 
         except Exception as e:
-            print(f"Error resetting 3D visualization: {str(e)}")
-            # Fallback: just show all points in default green
+            print(f"Error in view_neighbors: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Failed to find neighbors: {str(e)}")
+
+            # Temporarily disconnect the signal to avoid triggering update_tree_colors with empty field
+            self.color_combo.currentTextChanged.disconnect(self.update_tree_colors)
+
+            # Populate color field combo box with updated fields
+            available_fields = list(self.las_data.point_format.dimension_names)
+            color_fields = [field for field in available_fields
+                           if field not in ['x', 'y', 'z']]  # Include itc for multiple tree coloring
+
+            self.color_combo.clear()
+            self.color_combo.addItem("Default (green)")
+            for field in sorted(color_fields):
+                self.color_combo.addItem(field)
+
+            # Restore previous selection if it still exists
+            if current_selection and current_selection != "Default (green)":
+                index = self.color_combo.findText(current_selection)
+                if index >= 0:
+                    self.color_combo.setCurrentIndex(index)
+                else:
+                    # If previous selection no longer exists, select DBH points if available
+                    dbh_index = self.color_combo.findText("dbh_points")
+                    if dbh_index >= 0:
+                        self.color_combo.setCurrentIndex(dbh_index)
+                        self.log_to_console("🎨 Switched to 'dbh_points' coloring")
+
+            # Reconnect the signal
+            self.color_combo.currentTextChanged.connect(self.update_tree_colors)
+
+            self.log_to_console("✅ Color options updated - 'dbh_points' now available for coloring")
+
+        except Exception as e:
+            # Make sure to reconnect the signal even if there's an error
             try:
-                point_cloud = pv.PolyData(self.current_tree_points)
-                self.plotter.add_points(point_cloud, color='#4CAF50', point_size=2,
-                                      render_points_as_spheres=False)
-                self.plotter.update()
+                self.color_combo.currentTextChanged.connect(self.update_tree_colors)
             except:
                 pass
-
-    def show_split_results(self, results):
-        """Display split analysis results to console."""
-        if not results:
-            self.log_to_console("Split Analysis: No analysis results available.")
-            return
-
-        # Find branching height (first height where clusters >= 2)
-        branching_height = None
-        for i, result in enumerate(results):
-            if result['n_clusters'] >= 2 and (i == 0 or results[i-1]['n_clusters'] < 2):
-                branching_height = result['height']
-                break
-
-        # Create results text
-        result_text = f"Trunk Split Detection Results - {self.current_tree_id}\n"
-        result_text += "=" * 60 + "\n\n"
-
-        # Add parameters used
-        result_text += "Parameters Used:\n"
-        result_text += f"  Max Height: {self.max_height_input.text()}m\n"
-        result_text += f"  Step: {self.step_input.text()}m\n"
-        result_text += f"  Thickness: {self.thickness_input.text()}m\n"
-        result_text += f"  Min Points: {self.min_points_input.text()}\n"
-        result_text += f"  DBSCAN eps: 0.2m\n\n"
-
-        if branching_height is not None:
-            result_text += f"🔍 FIRST BRANCHING DETECTED at {branching_height:.1f}m above base!\n"
-            result_text += f"   📍 Primary split location marked with bright red plane in 3D view\n\n"
-        else:
-            result_text += "✅ No branching detected within analyzed height range.\n\n"
-
-        result_text += "Height Analysis:\n"
-        result_text += "-" * 40 + "\n"
-        result_text += f"{'Height':<8} {'Points':<8} {'Clusters':<10} {'Noise':<8} {'Sizes'}\n"
-        result_text += "-" * 40 + "\n"
-
-        # Count merged clusters and collect merge reasons
-        merged_info = []
-        for result in results:
-            if result.get('merged_clusters', False):
-                merge_reason = result.get('merge_reason', 'size differences or overlapping circles')
-                merged_info.append(f"  {result['height']:.1f}m: {merge_reason}")
-
-        for result in results:
-            sizes_str = str(result.get('cluster_sizes', [])) if result.get('cluster_sizes') else 'N/A'
-            merged_indicator = " (merged)" if result.get('merged_clusters', False) else ""
-            result_text += f"{result['height']:<8.1f} {result['n_points']:<8} {result['n_clusters']:<10} {result['n_noise']:<8} {sizes_str}{merged_indicator}\n"
-
-        if merged_info:
-            result_text += f"\nMerged Clusters Details ({len(merged_info)} levels):\n"
-            for info in merged_info:
-                result_text += f"{info}\n"
-
-        # Log to console instead of showing dialog
-        self.log_to_console(result_text)
-
-        # Additional prominent message for first split
-        if branching_height is not None:
-            self.log_to_console(f"🚨 FIRST SPLIT DETECTED: {branching_height:.1f}m above base - Marked with bright red plane in 3D view!")
-
-        # Create DBH points scalar field
-        self.create_dbh_points_field(results, branching_height)
-
-    def visualize_split_planes(self, results):
-        """Visualize split planes at branching heights."""
-        if not self.plotter or not results:
-            return
-
-        # Find branching heights (where clusters >= 2)
-        branching_heights = []
-        for result in results:
-            if result['n_clusters'] >= 2:
-                branching_heights.append(result['height'])
-
-        if not branching_heights:
-            return  # No splits to visualize
-
-        # Find the first branching height for special highlighting
-        first_branching_height = None
-        for i, result in enumerate(results):
-            if result['n_clusters'] >= 2 and (i == 0 or results[i-1]['n_clusters'] < 2):
-                first_branching_height = result['height']
-                break
-
-        # Get trunk base coordinates for plane positioning
-        if self.current_tree_points is not None and len(self.current_tree_points) > 0:
-            min_z = np.min(self.current_tree_points[:, 2])
-            # Use centroid of base points for plane center
-            base_points = self.current_tree_points[self.current_tree_points[:, 2] < min_z + 0.5]  # Points within 0.5m of base
-            if len(base_points) > 0:
-                center_x = np.mean(base_points[:, 0])
-                center_y = np.mean(base_points[:, 1])
-            else:
-                # Fallback to overall centroid
-                center_x = np.mean(self.current_tree_points[:, 0])
-                center_y = np.mean(self.current_tree_points[:, 1])
-
-            # Create and add split planes
-            for i, height in enumerate(branching_heights):
-                plane_z = min_z + height
-
-                # Create a disk/plane at the branching height
-                # Use a reasonable radius based on trunk spread
-                radius = 0.5  # 1 meter diameter
-
-                # Create a square plane and position it at the branching height
-                plane_size = 1.0  # 1m x 1m plane
-                plane_center = [float(center_x), float(center_y), float(plane_z)]
-                plane = pv.Plane(center=plane_center, direction=(0, 0, 1),
-                               i_size=plane_size, j_size=plane_size)
-
-                # Special highlighting for first split
-                is_first_split = (height == first_branching_height)
-                if is_first_split:
-                    # First split: Bright red, larger, more opaque
-                    color = '#FF0000'  # Bright red
-                    opacity = 0.9
-                    plane_size = 1.5  # Larger plane
-                    label = f'🚨 FIRST SPLIT: {height:.1f}m'
-                    point_color = '#FF0000'
-                else:
-                    # Subsequent splits: Alternate colors, less prominent
-                    color = '#FF4444' if i % 2 == 0 else '#FF8844'
-                    opacity = 0.7
-                    label = f'Split at {height:.1f}m'
-                    point_color = color
-
-                # Recreate plane with correct size for first split
-                if is_first_split:
-                    plane = pv.Plane(center=plane_center, direction=(0, 0, 1),
-                                   i_size=plane_size, j_size=plane_size)
-
-                # Add plane to plotter
-                self.plotter.add_mesh(plane, color=color, opacity=opacity, label=label)
-
-                # Add height label with appropriate styling
-                label_offset = radius + 0.2 if is_first_split else radius + 0.1
-                self.plotter.add_point_labels([(center_x + label_offset, center_y, plane_z)],
-                                            [f'{height:.1f}m' + (' 🚨' if is_first_split else '')],
-                                            font_size=12 if is_first_split else 10,
-                                            text_color='yellow' if is_first_split else 'white',
-                                            point_color=point_color, point_size=8 if is_first_split else 5)
-
-        # Update the plot
-        self.plotter.update()
-
-    def create_dbh_points_field(self, results, branching_height):
-        """Create DBH points scalar field containing trunk points below first split height."""
-        if self.las_data is None or self.current_mask is None:
-            return
-
-        try:
-            # Initialize dbh_points field with zeros
-            dbh_points = np.zeros(len(self.las_data), dtype=np.uint8)
-
-            # Get the height threshold
-            if branching_height is not None:
-                # Use first split height as threshold
-                min_z = np.min(self.current_tree_points[:, 2])
-                height_threshold = min_z + branching_height
-                self.log_to_console(f"📏 Creating DBH points field: trunk points below {branching_height:.1f}m (first split height)")
-            else:
-                # No split detected, use all trunk points
-                height_threshold = np.inf
-                self.log_to_console("📏 Creating DBH points field: all trunk points (no split detected)")
-
-            # Find indices of current tree points that are below the threshold
-            tree_indices = np.where(self.current_mask)[0]
-            tree_points_z = np.array(self.las_data.z)[tree_indices]
-
-            # Mark points below threshold as DBH points (value = 1)
-            dbh_mask = tree_points_z < height_threshold
-            dbh_indices = tree_indices[dbh_mask]
-            dbh_points[dbh_indices] = 1
-
-            # Add or update the scalar field in LAS data
-            field_name = "dbh_points"
-            if field_name in self.las_data.point_format.dimension_names:
-                # Field already exists, update it
-                self.las_data[field_name] = dbh_points
-                self.log_to_console("✅ Updated existing 'dbh_points' scalar field")
-            else:
-                # Field doesn't exist, add it
-                try:
-                    self.las_data.add_extra_dim(laspy.ExtraBytesParams(name=field_name, type=np.uint8))
-                    self.las_data[field_name] = dbh_points
-                    self.log_to_console("✅ Added new 'dbh_points' scalar field to LAS data")
-                except Exception as e:
-                    self.log_to_console(f"⚠️ Could not create 'dbh_points' field: {str(e)}")
-                    return
-
-            # Set the field values
-            self.las_data['dbh_points'] = dbh_points
-
-            # Count DBH points
-            n_dbh_points = np.sum(dbh_points)
-            self.log_to_console(f"📊 DBH points created: {n_dbh_points} points marked for tree {self.current_tree_id}")
-
-            # Refresh color combo box to include the new DBH points field
-            self.refresh_color_combo_box()
-
-            # Enable DBH component extraction if we have DBH points
-            if np.sum(dbh_points) > 0:
-                if hasattr(self, 'extract_dbh_button'):
-                    self.extract_dbh_button.setEnabled(True)
-                self.dbh_circles_button.setEnabled(True)
-
-        except Exception as e:
-            self.log_to_console(f"❌ Error creating DBH points field: {str(e)}")
-            print(f"Error in create_dbh_points_field: {str(e)}")
-
     def refresh_color_combo_box(self):
         """Refresh the color combo box to include newly added scalar fields like DBH points."""
         if self.las_data is None:
@@ -2858,7 +2876,7 @@ class TreeVisualizerGUI(QMainWindow):
         return centroid[:2]  # Return only X, Y coordinates
 
     def on_point_picked(self, picked_info):
-        """Callback for point picking - shows ITC value of picked point."""
+        """Callback for point picking - shows ITC value and trunk ID of picked point."""
         if self.current_tree_points is None or self.current_itc_values is None:
             self.log_to_console("Warning: No tree data available for point picking")
             return
@@ -2883,8 +2901,18 @@ class TreeVisualizerGUI(QMainWindow):
                 itc_value = self.current_itc_values[point_index]
                 point_coords = self.current_tree_points[point_index]
                 
-                # Log to console
+                # Build message with ITC and optional trunk ID
                 message = f"Point picked - ITC: {itc_value}, Coordinates: ({point_coords[0]:.2f}, {point_coords[1]:.2f}, {point_coords[2]:.2f})"
+                
+                # Add trunk ID if trunk assignment is available
+                if hasattr(self, 'trunk_assignment') and self.trunk_assignment is not None:
+                    if point_index < len(self.trunk_assignment):
+                        trunk_id = self.trunk_assignment[point_index]
+                        if trunk_id >= 0:
+                            message += f" | Trunk: {trunk_id}"
+                        else:
+                            message += " | Trunk: NOISE"
+                
                 self.log_to_console(message)
             else:
                 self.log_to_console("Warning: Point index out of range")
@@ -3506,12 +3534,14 @@ class TreeVisualizerGUI(QMainWindow):
         # Reset cluster highlighting state
         self.current_cluster_index = -1
         
+        # Reset trunk and branch detection state
+        self.trunk_assignment = None
+        self.branch_assignment = None
+        
         # Disable buttons when clearing
-        self.split_button.setEnabled(False)
-        self.decluster_button.setEnabled(False)
         self.detect_branches_button.setEnabled(False)
+        self.detect_trunks_button.setEnabled(False)
     # extract buttons removed
-        self.dbh_circles_button.setEnabled(False)
         self.draw_polygon_button.setEnabled(False)
         self.select_all_points_button.setEnabled(False)
         self.assign_itc_button.setEnabled(False)
@@ -3669,17 +3699,49 @@ class TreeVisualizerGUI(QMainWindow):
             batch_start_dt = datetime.now()
             self.log_to_console(f"⏱️ Batch analysis started at {batch_start_dt.strftime('%Y-%m-%d %H:%M:%S')}")
 
-            # Step 1: Prompt user for volume save folder (once at the beginning)
-            folder = QFileDialog.getExistingDirectory(
-                self, "Select Folder to Save Volume Results",
-                ""
-            )
-            if not folder:
-                self.log_to_console("ℹ️ Batch analysis cancelled - no folder selected.")
+            # --- Ask user for batch configuration dialogs (apply once at start) ---
+            skip_dialog = BatchSkipOptionsDialog(self, default_threshold=50)
+            if skip_dialog.exec() != QDialog.Accepted:
+                self.log_to_console("ℹ️ Batch cancelled by user (skip options)")
                 return
+            skip_opts = skip_dialog.get_options()
+            self.log_to_console(f"🔧 Batch skip options: {skip_opts}")
 
-            self.volume_folder_path = folder  # Store for reuse during batch
-            self.log_to_console(f"✅ Volume save folder set to: {folder}")
+            trunk_dialog = BatchTrunkParamsDialog(self, defaults=getattr(self, 'trunk_detection_params', {}))
+            if trunk_dialog.exec() == QDialog.Accepted:
+                new_trunk_params = trunk_dialog.get_params()
+                # Update UI widgets so detection uses these params
+                try:
+                    self.trunk_slice_height_input.setValue(int(new_trunk_params.get('slice_height_cm', 25)))
+                    self.trunk_base_zone_input.setValue(float(new_trunk_params.get('base_zone_height_m', 0.0)))
+                    self.trunk_eps_input.setValue(float(new_trunk_params.get('eps_m', 0.18)))
+                    self.trunk_min_samples_input.setValue(int(new_trunk_params.get('min_samples', 8)))
+                    self.trunk_merge_dist_input.setValue(float(new_trunk_params.get('merge_dist_m', 0.25)))
+                    self.trunk_min_points_input.setValue(int(new_trunk_params.get('min_trunk_points', 120)))
+                    self.trunk_min_span_input.setValue(float(new_trunk_params.get('min_vertical_span_m', 1.0)))
+                    self.trunk_full_assign_input.setValue(float(new_trunk_params.get('full_height_assign_dist_m', 0.45)))
+                    # Also update internal dict
+                    self.trunk_detection_params.update(new_trunk_params)
+                    self.log_to_console("🔧 Trunk detection parameters updated for batch run")
+                except Exception:
+                    pass
+
+            branch_dialog = BatchBranchParamsDialog(self, defaults={
+                'slice_height_cm': getattr(self, 'slice_height_input', None) and int(self.slice_height_input.value()) or 25,
+                'branch_eps': getattr(self, 'branch_eps_input', None) and float(self.branch_eps_input.value()) or 0.12,
+                'branch_min_samples': getattr(self, 'branch_min_samples_input', None) and int(self.branch_min_samples_input.value()) or 6,
+                'branch_merge_dist': getattr(self, 'branch_merge_dist_input', None) and float(self.branch_merge_dist_input.value()) or 0.25,
+            })
+            if branch_dialog.exec() == QDialog.Accepted:
+                new_branch_params = branch_dialog.get_params()
+                try:
+                    self.slice_height_input.setValue(int(new_branch_params.get('slice_height_cm', 25)))
+                    self.branch_eps_input.setValue(float(new_branch_params.get('branch_eps', 0.12)))
+                    self.branch_min_samples_input.setValue(int(new_branch_params.get('branch_min_samples', 6)))
+                    self.branch_merge_dist_input.setValue(float(new_branch_params.get('branch_merge_dist', 0.25)))
+                    self.log_to_console("🔧 Branch detection parameters updated for batch run")
+                except Exception:
+                    pass
 
             # Step 2: Get all tree IDs in sorted order (first to last)
             all_forest_ids = sorted(self.unique_itc_values.tolist())
@@ -3701,33 +3763,80 @@ class TreeVisualizerGUI(QMainWindow):
                 QMessageBox.warning(self, "Warning", "No trees with trunk points found in the list.")
                 return
 
-            # Step 4: Clear any accumulated volume data to start fresh
+            # Step 4: Prepare for batch run
             self.accumulated_volume_sections = []
             self.log_to_console("🔄 Cleared previous volume results.")
 
-            # Step 5: Loop through each valid tree and process
             processed_count = 0
             skipped_trees = []
-            
+
+            # Loop through each valid tree and process using new workflow
             for idx, tree_id in enumerate(valid_tree_ids, 1):
                 self.log_to_console(f"\n\n📍 Processing tree {idx}/{len(valid_tree_ids)}: ID={tree_id}")
-                
+
                 try:
-                    # Step 5a: Visualize trunk for this single tree
+                    # Visualize tree trunks for this ID
                     self._visualize_trunk_single_tree(tree_id)
-                    QApplication.processEvents()  # Update UI
-                    
-                    # Step 5b: Select all points in the visualization
+                    QApplication.processEvents()
+
+                    # Detect trunks in base zone
+                    try:
+                        self.detect_trunks_in_slices()
+                        QApplication.processEvents()
+                    except Exception as dt_e:
+                        self.log_to_console(f"⚠️ Trunk detection failed for tree {tree_id}: {dt_e}")
+
+                    # Evaluate trunk detection results
+                    num_trunks = 0
+                    if hasattr(self, 'trunk_assignment') and self.trunk_assignment is not None:
+                        unique_trunks = np.unique(self.trunk_assignment)
+                        unique_trunks = unique_trunks[unique_trunks >= 0]
+                        num_trunks = len(unique_trunks)
+
+                    if num_trunks == 0 and skip_opts.get('skip_no_trunk', True):
+                        self.log_to_console(f"⏭️ Skipping tree {tree_id}: no trunks detected")
+                        skipped_trees.append((tree_id, 'no_trunks'))
+                        continue
+
+                    # Optionally skip trees with only very small trunks
+                    if skip_opts.get('skip_small_trunk', True) and num_trunks > 0:
+                        # compute largest trunk point count
+                        trunk_sizes = []
+                        for t in unique_trunks:
+                            cnt = int(np.sum(self.trunk_assignment == t))
+                            trunk_sizes.append(cnt)
+                        max_size = max(trunk_sizes) if trunk_sizes else 0
+                        if max_size < int(skip_opts.get('small_trunk_threshold', 50)):
+                            self.log_to_console(f"⏭️ Skipping tree {tree_id}: largest trunk {max_size} pts < threshold")
+                            skipped_trees.append((tree_id, 'small_trunk'))
+                            continue
+
+                    # Detect branches (if trunks found)
+                    try:
+                        if num_trunks > 0:
+                            self.detect_branch_clusters_in_slices()
+                            QApplication.processEvents()
+                    except Exception as db_e:
+                        self.log_to_console(f"⚠️ Branch detection failed for tree {tree_id}: {db_e}")
+
+                    # Select all points and calculate volume for this tree
                     self._select_all_points_silent()
-                    QApplication.processEvents()  # Update UI
-                    
-                    # Step 5c: Calculate volume for this selection
+                    QApplication.processEvents()
                     self._calculate_volume_silent()
-                    QApplication.processEvents()  # Update UI
-                    
+                    QApplication.processEvents()
+
+                    # Export this tree's metrics using the existing export feature, then clear for the next tree.
+                    try:
+                        self.export_trunk_metrics()
+                    except Exception as export_e:
+                        self.log_to_console(f"⚠️ Export failed for tree {tree_id}: {export_e}")
+                        raise
+
+                    self.clear_accumulated_volume()
+
                     processed_count += 1
                     self.log_to_console(f"✅ Successfully processed tree {tree_id}")
-                    
+
                 except Exception as e:
                     self.log_to_console(f"⚠️ Skipped tree {tree_id}: {str(e)}")
                     skipped_trees.append((tree_id, str(e)))
@@ -3740,13 +3849,7 @@ class TreeVisualizerGUI(QMainWindow):
                         f"📈 Status: {idx}/{len(valid_tree_ids)} trees | {trees_per_min:.2f} trees/min | elapsed {elapsed_str}"
                     )
 
-            # Step 6: Save all accumulated volumes once to the pre-selected folder
-            if self.accumulated_volume_sections:
-                self.log_to_console(f"\n\n📊 Saving {len(self.accumulated_volume_sections)} sections to file...")
-                self._save_volume_data_silent()
-            else:
-                self.log_to_console("⚠️ No volume data to save.")
-
+            # Final summary
             batch_end_dt = datetime.now()
             elapsed_seconds = max(time.perf_counter() - batch_start_perf, 1e-9)
             elapsed_str = time.strftime("%H:%M:%S", time.gmtime(elapsed_seconds))
@@ -3754,7 +3857,6 @@ class TreeVisualizerGUI(QMainWindow):
                 f"⏱️ Batch analysis ended at {batch_end_dt.strftime('%Y-%m-%d %H:%M:%S')} | duration {elapsed_str}"
             )
 
-            # Step 7: Display completion summary
             self._display_batch_completion_summary(
                 processed_count,
                 len(valid_tree_ids),
@@ -3856,7 +3958,95 @@ class TreeVisualizerGUI(QMainWindow):
         circle_color = section_colors[(section_id - 1) % len(section_colors)]
         avg_color = 'red'
 
-        if self.plotter is not None:
+        # Support trunk-scoped processing when available
+        if hasattr(self, 'volume_groups_by_trunk') and self.volume_groups_by_trunk:
+            # Initialize trunk summary container
+            self.trunk_volume_summary = {}
+
+            for trunk_id, branch_list in sorted(self.volume_groups_by_trunk.items(), key=lambda x: x[0]):
+                trunk_total_vol = 0.0
+                trunk_point_count = 0
+                trunk_branch_details = []
+
+                for branch_info in branch_list:
+                    group_branch_id, _, group_points = branch_info
+                    point_color = section_colors[(section_id - 1) % len(section_colors)]
+                    circle_color = section_colors[(section_id - 1) % len(section_colors)]
+                    branch_suffix = f" | B{group_branch_id}" if group_branch_id is not None else ""
+
+                    # Add selected points
+                    selected_cloud = pv.PolyData(group_points)
+                    self.plotter.add_points(
+                        selected_cloud,
+                        color=point_color,
+                        point_size=4,
+                        opacity=0.6,
+                        name=f'volume_section_{section_id}_points',
+                        label=f'Section {section_id}{branch_suffix} Points ({len(group_points)} pts)'
+                    )
+
+                    # Add circle fitting
+                    measurement_label = "Diameter" if is_branch_mode else "DBH"
+                    section_data = self._add_dbh_circle_fitting_for_section(
+                        group_points,
+                        section_id,
+                        circle_color,
+                        avg_color,
+                        measurement_label=measurement_label
+                    )
+
+                    # Calculate volume
+                    section_volume = self._calculate_section_volume(section_data)
+
+                    # Store section (annotate with trunk_id)
+                    section_record = {
+                        'tree_id': section_tree_id,
+                        'section_id': section_id,
+                        'trunk_id': int(trunk_id),
+                        'branch_id': int(group_branch_id) if group_branch_id is not None else None,
+                        'points': group_points.copy(),
+                        'point_color': point_color,
+                        'circle_color': circle_color,
+                        'volume': section_volume,
+                        'circle_data': section_data
+                    }
+                    self.accumulated_volume_sections.append(section_record)
+
+                    # Update trunk totals and details
+                    trunk_total_vol += float(section_volume)
+                    trunk_point_count += int(len(group_points))
+                    trunk_branch_details.append({
+                        'branch_id': int(group_branch_id) if group_branch_id is not None else None,
+                        'volume': float(section_volume),
+                        'num_points': int(len(group_points)),
+                        'min_z': float(section_data.get('min_z', 0.0)),
+                        'max_z': float(section_data.get('max_z', 0.0))
+                    })
+
+                    self.log_to_console(
+                        f"📏 Calculated volume for tree {section_tree_id}, trunk T{trunk_id} branch B{group_branch_id}: {section_volume:.4f} m³ (height: {section_data.get('height_range', 0.0):.2f}m, Z {section_data.get('min_z', 0.0):.2f}-{section_data.get('max_z', 0.0):.2f}m)"
+                    )
+
+                    section_id += 1
+
+                # Save trunk summary
+                self.trunk_volume_summary[int(trunk_id)] = {
+                    'tree_id': section_tree_id,
+                    'trunk_id': int(trunk_id),
+                    'total_volume': float(trunk_total_vol),
+                    'num_branches': len(trunk_branch_details),
+                    'total_points': int(trunk_point_count),
+                    'branches': trunk_branch_details
+                }
+
+                self.log_to_console(f"🧾 Trunk T{trunk_id} total volume: {trunk_total_vol:.4f} m³ ({len(trunk_branch_details)} branches, {trunk_point_count} pts)")
+
+            # Also log overall totals
+            overall_total = sum(t['total_volume'] for t in self.trunk_volume_summary.values())
+            self.log_to_console(f"📊 Overall tree total (sum of trunks): {overall_total:.4f} m³")
+
+        else:
+            # Fallback to original behavior (global/grouped branches)
             for group_branch_id, _, group_points in volume_groups:
                 point_color = section_colors[(section_id - 1) % len(section_colors)]
                 circle_color = section_colors[(section_id - 1) % len(section_colors)]
@@ -3901,18 +4091,44 @@ class TreeVisualizerGUI(QMainWindow):
 
                 if group_branch_id is not None:
                     self.log_to_console(
-                        f"📏 Calculated volume for tree {section_tree_id}, branch B{group_branch_id}: {section_volume:.4f} m³"
+                        f"📏 Calculated volume for tree {section_tree_id}, branch B{group_branch_id}: {section_volume:.4f} m³ (height: {section_data.get('height_range', 0.0):.2f}m, Z {section_data.get('min_z', 0.0):.2f}-{section_data.get('max_z', 0.0):.2f}m)"
                     )
                 else:
-                    self.log_to_console(f"📏 Calculated volume for tree {section_tree_id}: {section_volume:.4f} m³")
+                    self.log_to_console(f"📏 Calculated volume for tree {section_tree_id}: {section_volume:.4f} m³ (height: {section_data.get('height_range', 0.0):.2f}m, Z {section_data.get('min_z', 0.0):.2f}-{section_data.get('max_z', 0.0):.2f}m)")
 
                 section_id += 1
 
-            # Perform global ground proximity check only in non-branch mode
-            if not is_branch_mode:
+            # Perform global ground proximity check (allow in branch mode too)
+            # This enables using globally fitted/extrapolated circles as DBH references
+            try:
                 self._check_global_ground_proximity_and_extrapolate()
-            else:
-                self.log_to_console("ℹ️ Branch mode: ground extrapolation disabled")
+            except Exception as e:
+                self.log_to_console(f"⚠️ Error during global extrapolation: {e}")
+
+            # Log extrapolation notification for any sections that were extrapolated
+            for sec in self.accumulated_volume_sections:
+                if sec.get('extrapolated') and sec.get('section_id') != "global_extrapolated":
+                    sec_id = sec['section_id']
+                    orig_hr = sec.get('original_height_range', 0.0)
+                    extr_hr = sec.get('extrapolated_height_range', 0.0)
+                    orig_min = sec.get('original_min_z', 0.0)
+                    extr_min = sec.get('extrapolated_min_z', 0.0)
+                    n_ext = sec.get('num_extrapolated_circles', 0)
+                    ground = sec.get('ground_level_used', 0.0)
+                    self.log_to_console(
+                        f"⚠️ Section {sec_id}: EXTRAPOLATED to ground — original height: {orig_hr:.2f}m (Z {orig_min:.2f}m), "
+                        f"extrapolated height: {extr_hr:.2f}m (Z {extr_min:.2f}m), "
+                        f"{n_ext} circles added, ground level: {ground:.2f}m"
+                    )
+                elif sec.get('extrapolated') and sec.get('section_id') == "global_extrapolated":
+                    extr_hr = sec.get('extrapolated_height_range', 0.0)
+                    extr_min = sec.get('extrapolated_min_z', 0.0)
+                    n_ext = sec.get('num_extrapolated_circles', 0)
+                    ground = sec.get('ground_level_used', 0.0)
+                    self.log_to_console(
+                        f"⚠️ Global extrapolation section: height {extr_hr:.2f}m (Z {extr_min:.2f}m), "
+                        f"{n_ext} circles added, ground level: {ground:.2f}m"
+                    )
 
             self.plotter.update()
 
@@ -3952,7 +4168,14 @@ class TreeVisualizerGUI(QMainWindow):
                     'point_color': section['point_color'],
                     'circle_color': section['circle_color'],
                     'num_points': len(section['points']),
-                    'circle_data': section['circle_data']
+                    'circle_data': section['circle_data'],
+                    'extrapolated': section.get('extrapolated', False),
+                    'original_height_range': section.get('original_height_range'),
+                    'extrapolated_height_range': section.get('extrapolated_height_range'),
+                    'original_min_z': section.get('original_min_z'),
+                    'extrapolated_min_z': section.get('extrapolated_min_z'),
+                    'num_extrapolated_circles': section.get('num_extrapolated_circles'),
+                    'ground_level_used': section.get('ground_level_used')
                 }
                 trees_data[tree_id]['sections'].append(section_data)
 
@@ -3991,11 +4214,485 @@ class TreeVisualizerGUI(QMainWindow):
                 saved_count += 1
                 self.log_to_console(f"💾 Saved tree {tree_id}: {save_data['total_volume']:.4f} m³ → {filename}")
 
+                # Also write branch and trunk CSV summaries for this tree
+                try:
+                    import csv
+
+                    branch_csv = os.path.join(self.volume_folder_path, f"tree_{tree_id}_branchVolumes.csv")
+                    trunk_csv = os.path.join(self.volume_folder_path, f"tree_{tree_id}_trunkVolumes.csv")
+
+                    # Prepare branch rows
+                    branch_rows = []
+                    for sec in save_data.get('sections', []):
+                        circ = sec.get('circle_data', {}) or {}
+                        branch_rows.append({
+                            'tree_id': tree_id,
+                            'section_id': sec.get('section_id'),
+                            'trunk_id': sec.get('trunk_id', None) if 'trunk_id' in sec else None,
+                            'branch_id': sec.get('branch_id'),
+                            'volume_m3': sec.get('volume', 0.0),
+                            'num_points': sec.get('num_points', 0),
+                            'min_z': circ.get('min_z', sec.get('original_min_z')),
+                            'max_z': circ.get('max_z', sec.get('extrapolated_min_z')),
+                            'height_m': circ.get('height_range', None)
+                        })
+
+                    # Write branch CSV
+                    if branch_rows:
+                        with open(branch_csv, 'w', newline='') as bf:
+                            writer = csv.DictWriter(bf, fieldnames=list(branch_rows[0].keys()))
+                            writer.writeheader()
+                            for r in branch_rows:
+                                writer.writerow(r)
+                        self.log_to_console(f"💾 Branch CSV saved: {branch_csv}")
+
+                    # Prepare trunk aggregation
+                    trunk_totals = {}
+                    for r in branch_rows:
+                        trunk_key = r.get('trunk_id', None)
+                        if trunk_key is None:
+                            trunk_key = -1
+                        trunk = trunk_totals.setdefault(trunk_key, {'total_volume': 0.0, 'num_branches': 0, 'total_points': 0})
+                        trunk['total_volume'] += float(r.get('volume_m3', 0.0) or 0.0)
+                        trunk['num_branches'] += 1
+                        trunk['total_points'] += int(r.get('num_points', 0) or 0)
+
+                    # Write trunk CSV
+                    trunk_rows = []
+                    for t_id, vals in trunk_totals.items():
+                        trunk_rows.append({
+                            'tree_id': tree_id,
+                            'trunk_id': t_id,
+                            'total_volume_m3': vals['total_volume'],
+                            'num_branches': vals['num_branches'],
+                            'total_points': vals['total_points']
+                        })
+
+                    if trunk_rows:
+                        with open(trunk_csv, 'w', newline='') as tf:
+                            writer = csv.DictWriter(tf, fieldnames=list(trunk_rows[0].keys()))
+                            writer.writeheader()
+                            for r in trunk_rows:
+                                writer.writerow(r)
+                        self.log_to_console(f"💾 Trunk CSV saved: {trunk_csv}")
+
+                    # Add multi_trunk flag to saved JSON
+                    multi_trunk = len([t for t in trunk_totals.keys() if t is not None and t != -1]) > 1
+                    save_data['multi_trunk'] = multi_trunk
+                    # Rewrite JSON with the flag
+                    with open(filename, 'w') as f:
+                        json.dump(save_data, f, indent=2)
+
+                except Exception as csv_e:
+                    self.log_to_console(f"⚠️ Failed to write branch/trunk CSVs for tree {tree_id}: {csv_e}")
+
             self.log_to_console(f"✅ All volume data saved to {self.volume_folder_path}")
 
         except Exception as e:
             self.log_to_console(f"❌ Error saving volume data: {str(e)}")
             raise
+
+
+    def _save_batch_results(self, export_folder, volume_folder, batch_meta=None):
+        """Save accumulated batch results as a single JSON and aggregated CSVs.
+
+        export_folder: path to write CSVs (export/batch/<las_basename>)
+        volume_folder: path to write JSON (volume/batch/<las_basename>)
+        batch_meta: optional dict with metadata about the batch run
+        """
+        if not self.accumulated_volume_sections:
+            self.log_to_console("⚠️ No accumulated volume sections to save for batch")
+            return
+
+        try:
+            import json
+            import csv
+            import tempfile
+
+            # Determine base name for files
+            if hasattr(self, 'current_las_path') and self.current_las_path:
+                las_basename = os.path.splitext(os.path.basename(self.current_las_path))[0]
+            else:
+                las_basename = 'batch'
+
+            ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+            # Build trees_data dictionary (exclude raw point arrays)
+            trees_data = {}
+            for sec in self.accumulated_volume_sections:
+                section_id = sec.get('section_id')
+                if section_id != 'global_extrapolated':
+                    try:
+                        int(section_id)
+                    except (ValueError, TypeError):
+                        continue
+
+                tree_id = sec.get('tree_id')
+                if tree_id not in trees_data:
+                    trees_data[tree_id] = {'sections': [], 'timestamp': str(pd.Timestamp.now()) if 'pd' in globals() else str(datetime.now())}
+
+                circ = sec.get('circle_data') or {}
+                sec_entry = {
+                    'section_id': sec.get('section_id'),
+                    'trunk_id': sec.get('trunk_id', None),
+                    'branch_id': sec.get('branch_id', None),
+                    'volume': float(sec.get('volume', 0.0) or 0.0),
+                    'num_points': int(len(sec.get('points') or [])),
+                    'point_color': sec.get('point_color'),
+                    'circle_color': sec.get('circle_color'),
+                    'circle_data': circ,
+                    'extrapolated': sec.get('extrapolated', False),
+                    'original_height_range': sec.get('original_height_range'),
+                    'extrapolated_height_range': sec.get('extrapolated_height_range'),
+                    'original_min_z': sec.get('original_min_z'),
+                    'extrapolated_min_z': sec.get('extrapolated_min_z'),
+                    'num_extrapolated_circles': sec.get('num_extrapolated_circles'),
+                    'ground_level_used': sec.get('ground_level_used')
+                }
+                trees_data[tree_id]['sections'].append(sec_entry)
+
+            # Compute per-tree totals
+            total_sections = 0
+            total_volume = 0.0
+            for tree_id, td in trees_data.items():
+                td['total_sections'] = len(td['sections'])
+                td['total_volume'] = sum(s['volume'] for s in td['sections'])
+                td['total_points'] = sum(s['num_points'] for s in td['sections'])
+                total_sections += td['total_sections']
+                total_volume += td['total_volume']
+
+            # Build batch JSON
+            batch_id = ts
+            batch_obj = {
+                'batch_id': batch_id,
+                'timestamp': datetime.now().isoformat(),
+                'source_las': getattr(self, 'current_las_path', None),
+                'batch_meta': batch_meta or {},
+                'total_sections': total_sections,
+                'total_volume': total_volume,
+                'trees': trees_data
+            }
+
+            # Atomic write JSON
+            json_name = os.path.join(volume_folder, f"{las_basename}_batch_{ts}.json")
+            fd, tmp_json = tempfile.mkstemp(suffix='.json', prefix=f"{las_basename}_batch_{ts}_", dir=volume_folder)
+            try:
+                with os.fdopen(fd, 'w') as tf:
+                    json.dump(batch_obj, tf, indent=2)
+                os.replace(tmp_json, json_name)
+            finally:
+                if os.path.exists(tmp_json):
+                    try:
+                        os.remove(tmp_json)
+                    except Exception:
+                        pass
+
+            # Prepare aggregated CSV rows
+            branch_rows = []
+            for tree_id, td in trees_data.items():
+                for s in td['sections']:
+                    circ = s.get('circle_data') or {}
+                    branch_rows.append({
+                        'tree_id': tree_id,
+                        'section_id': s.get('section_id'),
+                        'trunk_id': s.get('trunk_id'),
+                        'branch_id': s.get('branch_id'),
+                        'volume_m3': s.get('volume', 0.0),
+                        'num_points': s.get('num_points', 0),
+                        'min_z': circ.get('min_z', s.get('original_min_z')),
+                        'max_z': circ.get('max_z', s.get('extrapolated_min_z')),
+                        'height_m': circ.get('height_range', None)
+                    })
+
+            # Write branch CSV
+            branch_csv = os.path.join(export_folder, f"{las_basename}_batch_{ts}_branches.csv")
+            if branch_rows:
+                tmp_branch = branch_csv + '.tmp'
+                with open(tmp_branch, 'w', newline='') as bf:
+                    writer = csv.DictWriter(bf, fieldnames=list(branch_rows[0].keys()))
+                    writer.writeheader()
+                    for r in branch_rows:
+                        writer.writerow(r)
+                os.replace(tmp_branch, branch_csv)
+
+            # Aggregate trunk rows
+            trunk_totals = {}
+            for r in branch_rows:
+                trunk_key = (r.get('tree_id'), r.get('trunk_id'))
+                if trunk_key not in trunk_totals:
+                    trunk_totals[trunk_key] = {'total_volume': 0.0, 'num_branches': 0, 'total_points': 0}
+                trunk_totals[trunk_key]['total_volume'] += float(r.get('volume_m3') or 0.0)
+                trunk_totals[trunk_key]['num_branches'] += 1
+                trunk_totals[trunk_key]['total_points'] += int(r.get('num_points') or 0)
+
+            trunk_rows = []
+            for (tree_id, trunk_id), vals in trunk_totals.items():
+                trunk_rows.append({
+                    'tree_id': tree_id,
+                    'trunk_id': trunk_id,
+                    'total_volume_m3': vals['total_volume'],
+                    'num_branches': vals['num_branches'],
+                    'total_points': vals['total_points']
+                })
+
+            trunk_csv = os.path.join(export_folder, f"{las_basename}_batch_{ts}_trunks.csv")
+            if trunk_rows:
+                tmp_trunk = trunk_csv + '.tmp'
+                with open(tmp_trunk, 'w', newline='') as tf:
+                    writer = csv.DictWriter(tf, fieldnames=list(trunk_rows[0].keys()))
+                    writer.writeheader()
+                    for r in trunk_rows:
+                        writer.writerow(r)
+                os.replace(tmp_trunk, trunk_csv)
+
+            self.log_to_console(f"💾 Batch JSON saved: {json_name}")
+            if branch_rows:
+                self.log_to_console(f"💾 Batch branch CSV saved: {branch_csv}")
+            if trunk_rows:
+                self.log_to_console(f"💾 Batch trunk CSV saved: {trunk_csv}")
+
+            self.log_to_console(f"✅ Batch results saved to {export_folder} and {volume_folder}")
+
+        except Exception as e:
+            self.log_to_console(f"❌ Error saving batch results: {e}")
+            raise
+
+    def export_trunk_metrics(self):
+        """Export one CSV row per trunk with location, total volume, and DBH to export folder."""
+        if not self.accumulated_volume_sections:
+            self.log_to_console("⚠️ No volume calculation data to export.")
+            return
+
+        try:
+            trunk_summary, _, _ = self._build_trunk_volume_summary_table()
+            trunk_dbh_summary, _, trunk_dbh_details = self._build_trunk_dbh_summary_table()
+
+            if not trunk_summary:
+                QMessageBox.warning(
+                    self,
+                    "No Trunk Data",
+                    "No trunk-level data found. Run trunk/branch detection and volume calculation first."
+                )
+                return
+
+            # Determine export directory and filename based on loaded point cloud
+            if hasattr(self, 'current_las_path') and self.current_las_path:
+                las_dir = os.path.dirname(self.current_las_path)
+                las_basename = os.path.splitext(os.path.basename(self.current_las_path))[0]
+                export_dir = os.path.join(las_dir, 'export')
+            else:
+                export_dir = os.path.join(os.getcwd(), 'export')
+                las_basename = 'trunk_metrics'
+
+            # Create export directory if it doesn't exist
+            os.makedirs(export_dir, exist_ok=True)
+
+            save_path = os.path.join(export_dir, f"{las_basename}_trunk_metrics.csv")
+
+            rows = []
+            for trunk_id in sorted(trunk_summary.keys(), key=lambda x: (isinstance(x, str), x)):
+                # Skip non-numeric trunk IDs (e.g., 'Multiple Trunks (26)')
+                try:
+                    trunk_id_int = int(trunk_id)
+                except (ValueError, TypeError):
+                    self.log_to_console(f"⚠️ Skipping non-numeric trunk ID: {trunk_id}")
+                    continue
+
+                summary_rec = trunk_summary[trunk_id]
+                dbh_cm = trunk_dbh_summary.get(trunk_id)
+                dbh_rec = trunk_dbh_details.get(trunk_id, {})
+
+                center_xyz = dbh_rec.get('center_xyz')
+                location_source = dbh_rec.get('section_id', 'section_avg_center')
+
+                if center_xyz is None:
+                    # Fallback location from section average centers for this trunk.
+                    centers = []
+                    z_refs = []
+                    for sec in self.accumulated_volume_sections:
+                        if sec.get('trunk_id', None) != trunk_id:
+                            continue
+                        circle_data = sec.get('circle_data') or {}
+                        avg_center = circle_data.get('avg_center')
+                        if avg_center is not None and len(avg_center) >= 2:
+                            centers.append([float(avg_center[0]), float(avg_center[1])])
+                            z_refs.append(float(circle_data.get('min_z', 0.0)))
+
+                    if centers:
+                        centers_arr = np.array(centers, dtype=float)
+                        center_xyz = [
+                            float(np.mean(centers_arr[:, 0])),
+                            float(np.mean(centers_arr[:, 1])),
+                            float(np.mean(z_refs)) if z_refs else 0.0,
+                        ]
+                    else:
+                        center_xyz = [None, None, None]
+
+                # Collect associated tree IDs from accumulated sections for this trunk
+                tree_ids = []
+                import re
+                for sec in self.accumulated_volume_sections:
+                    if sec.get('trunk_id', None) == trunk_id and sec.get('tree_id', None) is not None:
+                        try:
+                            sec_tree_id = str(sec.get('tree_id'))
+                            found_ids = [int(x) for x in re.findall(r'\d+', sec_tree_id)]
+                            if found_ids:
+                                tree_ids.extend(found_ids)
+                            else:
+                                tree_ids.append(int(sec_tree_id))
+                        except (ValueError, TypeError):
+                            pass
+                tree_ids = sorted(set(tree_ids))
+
+                # Fallbacks: if no tree_ids found in sections, use the tree_id stored in trunk_volume_summary
+                if not tree_ids:
+                    try:
+                        tinfo = getattr(self, 'trunk_volume_summary', {}).get(int(trunk_id))
+                        if tinfo is not None:
+                            tid = tinfo.get('tree_id')
+                            if tid is not None:
+                                found_ids = [int(x) for x in re.findall(r'\d+', str(tid))]
+                                if found_ids:
+                                    tree_ids = found_ids
+                                else:
+                                    tree_ids = [int(tid)]
+                    except Exception:
+                        pass
+
+                # Final fallback: use current_tree_id if available
+                if not tree_ids and getattr(self, 'current_tree_id', None) is not None:
+                    try:
+                        curr_id_str = str(self.current_tree_id)
+                        found_ids = [int(x) for x in re.findall(r'\d+', curr_id_str)]
+                        if found_ids:
+                            tree_ids = found_ids
+                        else:
+                            tree_ids = [int(self.current_tree_id)]
+                    except Exception:
+                        pass
+
+                # Absolute fallback: store trunk_volume_summary tree_id or current_tree_id directly in the row if still empty
+                resolved_tree_ids = ';'.join(str(t) for t in tree_ids) if tree_ids else ''
+                if not resolved_tree_ids:
+                    try:
+                        tinfo = getattr(self, 'trunk_volume_summary', {}).get(int(trunk_id))
+                        if tinfo is not None and tinfo.get('tree_id') is not None:
+                            tid = tinfo.get('tree_id')
+                            found_ids = [int(x) for x in re.findall(r'\d+', str(tid))]
+                            if found_ids:
+                                resolved_tree_ids = ';'.join(str(t) for t in found_ids)
+                            else:
+                                resolved_tree_ids = str(int(tid))
+                    except Exception:
+                        pass
+                if not resolved_tree_ids and getattr(self, 'current_tree_id', None) is not None:
+                    try:
+                        curr_id_str = str(self.current_tree_id)
+                        found_ids = [int(x) for x in re.findall(r'\d+', curr_id_str)]
+                        if found_ids:
+                            resolved_tree_ids = ';'.join(str(t) for t in found_ids)
+                        else:
+                            resolved_tree_ids = str(int(self.current_tree_id))
+                    except Exception:
+                        pass
+
+                try:
+                    rows.append({
+                        'tree_ids': resolved_tree_ids,
+                        'trunk_id': trunk_id_int,
+                        'location_x_m': center_xyz[0],
+                        'location_y_m': center_xyz[1],
+                        'location_z_m': center_xyz[2],
+                        'location_source': location_source,
+                        'total_volume_m3': float(summary_rec.get('total_volume', 0.0)),
+                        'dbh_cm': float(dbh_cm) if dbh_cm is not None else None,
+                        'dbh_source': dbh_rec.get('section_id', ''),
+                        'num_branches': int(summary_rec.get('num_branches', 0)),
+                        'total_points': int(summary_rec.get('total_points', 0)),
+                    })
+                except (ValueError, TypeError) as row_err:
+                    self.log_to_console(f"⚠️ Skipping trunk {trunk_id} due to conversion error: {row_err}")
+                    continue
+
+            import csv
+
+            # If file exists, read existing rows so we can preserve prior exports and backfill blank tree IDs.
+            existing_rows = []
+            if os.path.exists(save_path):
+                try:
+                    with open(save_path, 'r', newline='') as rf:
+                        reader = csv.DictReader(rf)
+                        for r in reader:
+                            existing_rows.append(r)
+                    self.log_to_console(f"ℹ️ Found existing export file; {len(existing_rows)} existing row(s) loaded for merge/dedup.")
+                except Exception as e:
+                    self.log_to_console(f"⚠️ Could not read existing export file: {e}")
+
+            # Merge by (trunk_id, tree_id) composite key to keep trunks from different trees separate.
+            merged_by_trunk = {}
+
+            def _split_tree_ids(value):
+                return [s.strip() for s in str(value or '').split(';') if s.strip()]
+
+            def _get_merge_key(trunk_id, tree_ids_str):
+                """Get a unique merge key based on trunk_id and primary tree_id."""
+                tree_ids = _split_tree_ids(tree_ids_str)
+                primary_tree_id = tree_ids[0] if tree_ids else None
+                return (trunk_id, primary_tree_id)
+
+            for r in existing_rows:
+                try:
+                    trunk_int = int(r.get('trunk_id'))
+                    tree_ids_str = r.get('tree_ids', '')
+                    key = _get_merge_key(trunk_int, tree_ids_str)
+                except Exception:
+                    continue
+                merged_by_trunk[key] = dict(r)
+
+            for r in rows:
+                try:
+                    trunk_int = int(r.get('trunk_id'))
+                    tree_ids_str = r.get('tree_ids', '')
+                    key = _get_merge_key(trunk_int, tree_ids_str)
+                except Exception:
+                    continue
+
+                new_tree_ids = _split_tree_ids(tree_ids_str)
+                existing = merged_by_trunk.get(key)
+                if existing is None:
+                    merged_by_trunk[key] = dict(r)
+                    continue
+
+                # Row already exists for this trunk+tree combo; update with new data
+                old_tree_ids = _split_tree_ids(existing.get('tree_ids', ''))
+                combined_tree_ids = sorted(set(old_tree_ids + new_tree_ids), key=lambda x: (not x.isdigit(), int(x) if x.isdigit() else x))
+                existing['tree_ids'] = ';'.join(combined_tree_ids)
+
+                for key_name, value in r.items():
+                    if key_name == 'tree_ids':
+                        continue
+                    if value not in (None, ''):
+                        existing[key_name] = value
+
+            rows_to_write = [merged_by_trunk[k] for k in sorted(merged_by_trunk.keys(), key=lambda x: (x[0], int(x[1]) if x[1] and str(x[1]).isdigit() else x[1]))]
+
+            with open(save_path, 'w', newline='') as f:
+                fieldnames = [
+                    'tree_ids', 'trunk_id',
+                    'location_x_m', 'location_y_m', 'location_z_m', 'location_source',
+                    'total_volume_m3', 'dbh_cm', 'dbh_source',
+                    'num_branches', 'total_points'
+                ]
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                for row in rows_to_write:
+                    writer.writerow(row)
+
+            self.log_to_console(f"💾 Wrote {len(rows_to_write)} merged trunk row(s) to: {save_path}")
+
+        except Exception as e:
+            self.log_to_console(f"❌ Error exporting trunk metrics: {str(e)}")
+            QMessageBox.critical(self, "Export Error", f"Failed to export trunk metrics:\n{str(e)}")
 
     def _display_batch_completion_summary(self, processed_count, total_count, skipped_trees, batch_start_dt, batch_end_dt, elapsed_seconds):
         """Display completion summary in console."""
@@ -4009,237 +4706,258 @@ class TreeVisualizerGUI(QMainWindow):
         summary = f"\n\n{'='*60}\n📊 BATCH ANALYSIS COMPLETE\n{'='*60}\n"
         summary += f"Successfully processed: {processed_count}/{total_count} trees\n"
         summary += f"Skipped: {len(skipped_trees)} trees\n"
-        summary += f"Volume folder: {self.volume_folder_path}\n"
-        summary += f"Start time: {batch_start_dt.strftime('%Y-%m-%d %H:%M:%S')}\n"
-        summary += f"End time: {batch_end_dt.strftime('%Y-%m-%d %H:%M:%S')}\n"
-        summary += f"Elapsed time: {elapsed_str}\n"
-        summary += f"Average throughput: {average_trees_per_min:.2f} trees/min\n"
-        
-        if skipped_trees:
-            summary += f"\nSkipped trees:\n"
-            for tree_id, reason in skipped_trees:
-                summary += f"  - Tree {tree_id}: {reason}\n"
-        
-        if self.accumulated_volume_sections:
-            total_volume = sum(s['volume'] for s in self.accumulated_volume_sections)
-            summary += f"\nTotal volume accumulated: {total_volume:.4f} m³\n"
-        
+        summary += f"Time elapsed: {elapsed_str}\n"
+        summary += f"Average: {average_trees_per_min:.1f} trees/min\n"
         summary += f"{'='*60}\n"
+        
         self.log_to_console(summary)
 
-    def visualize_height_slices(self):
-        """Visualize trunk divided into horizontal height slices for branch separation."""
-        if self.current_tree_points is None:
-            QMessageBox.warning(self, "Warning", "No trunk visualized. Please visualize a trunk first.")
-            return
+    # ======================== PHASE 1: TRUNK DETECTION ========================
 
-        try:
-            # Get slice height in meters (convert from cm via spinner)
-            slice_height_cm = self.slice_height_input.value()
-            slice_height_m = slice_height_cm / 100.0
-            
-            self.log_to_console(f"\n{'='*60}")
-            self.log_to_console(f"📏 Declustering trunk into {slice_height_cm} cm height slices...")
-            self.log_to_console(f"{'='*60}")
-            
-            # Extract Z coordinates
-            z_coords = self.current_tree_points[:, 2]
-            min_z = np.min(z_coords)
-            max_z = np.max(z_coords)
-            trunk_height = max_z - min_z
-            
-            self.log_to_console(f"Trunk height range: {min_z:.2f}m to {max_z:.2f}m ({trunk_height:.2f}m total)")
-            
-            # Calculate slice boundaries
-            slice_boundaries = np.arange(min_z, max_z + slice_height_m, slice_height_m)
-            num_slices = len(slice_boundaries) - 1
-            
-            self.log_to_console(f"Total slices: {num_slices}")
-            
-            # Create color palette for slices
-            # Use a rainbow-like palette with enough distinct colors
-            import matplotlib.cm as cm
-            import warnings
-            
-            # Suppress deprecation warning for get_cmap in matplotlib >= 3.7
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", DeprecationWarning)
-                if num_slices <= 10:
-                    cmap = cm.get_cmap('tab10')
-                elif num_slices <= 20:
-                    cmap = cm.get_cmap('tab20')
-                else:
-                    cmap = cm.get_cmap('hsv')
-            
-            colors = cmap(np.linspace(0, 1, num_slices))
-            
-            # Clear current visualization
-            self.plotter.clear()
-            
-            # Add each slice with unique color
-            for i in range(num_slices):
-                z_start = slice_boundaries[i]
-                z_end = slice_boundaries[i + 1]
-                
-                # Create mask for points in this slice
-                slice_mask = (z_coords >= z_start) & (z_coords < z_end)
-                
-                # For the last slice, include the upper boundary
-                if i == num_slices - 1:
-                    slice_mask = (z_coords >= z_start) & (z_coords <= z_end)
-                
-                slice_points = self.current_tree_points[slice_mask]
-                
-                if len(slice_points) > 0:
-                    # Get color from colormap (already in [0, 1] range)
-                    color = colors[i % len(colors)]
-                    # PyVista accepts [0, 1] range colors directly, convert to native Python list
-                    rgb_color = [float(color[0]), float(color[1]), float(color[2])]
-                    
-                    # Add slice to plotter
-                    self.plotter.add_points(
-                        slice_points,
-                        color=rgb_color,
-                        point_size=5,
-                        name=f'Slice_{i}'
-                    )
-                    
-                    # Log slice info
-                    self.log_to_console(f"  Slice {i}: {z_start:.2f}m - {z_end:.2f}m | {len(slice_points)} points")
-            
-            # Add horizontal plane lines at slice boundaries for reference
-            for i, z_val in enumerate(slice_boundaries):
-                # Get min/max X,Y at this height to draw reference planes
-                points_at_height = self.current_tree_points[
-                    (z_coords >= z_val - 0.01) & (z_coords <= z_val + 0.01)
-                ]
-                if len(points_at_height) > 0:
-                    x_min, x_max = np.min(points_at_height[:, 0]), np.max(points_at_height[:, 0])
-                    y_min, y_max = np.min(points_at_height[:, 1]), np.max(points_at_height[:, 1])
-                    
-                    # Draw a small cross at the slice boundary center
-                    center_x = (x_min + x_max) / 2
-                    center_y = (y_min + y_max) / 2
-                    
-                    # Horizontal line
-                    line_x = np.array([x_min, x_max])
-                    line_y = np.array([center_y, center_y])
-                    line_z = np.array([z_val, z_val])
-                    
-                    self.plotter.add_lines(
-                        np.column_stack([line_x, line_y, line_z]),
-                        color=(128, 128, 128),
-                        width=1,
-                        name=f'boundary_h_{i}'
-                    )
-            
-            # Add legend if supported
-            try:
-                self.plotter.add_legend()
-            except Exception as legend_error:
-                self.log_to_console(f"(Legend display skipped: {str(legend_error)})")
-            
-            # Fit to screen and update
-            self.plotter.reset_camera()
-            self.plotter.update()
-            
-            self.log_to_console(f"✅ Height slice visualization complete!\n")
-            
-        except Exception as e:
-            self.log_to_console(f"❌ Error visualizing height slices: {str(e)}")
-            QMessageBox.critical(self, "Error", f"Failed to visualize height slices:\n{str(e)}")
-
-    def detect_branch_clusters_in_slices(self):
-        """Detect individual branches using DBSCAN on radial coordinates within each height slice."""
-        if self.current_tree_points is None:
-            QMessageBox.warning(self, "Warning", "No trunk visualized. Please visualize a trunk first.")
-            return
+    def _build_z_slices(self, points, slice_height_m):
+        """Build z-slice boundaries for a given slice height.
         
+        Returns:
+            z_coords, min_z, max_z, slice_boundaries, num_slices
+        """
+        z_coords = points[:, 2]
+        min_z = np.min(z_coords)
+        max_z = np.max(z_coords)
+        slice_boundaries = np.arange(min_z, max_z + slice_height_m, slice_height_m)
+        num_slices = len(slice_boundaries) - 1
+        return z_coords, min_z, max_z, slice_boundaries, num_slices
+
+    def _cluster_xy_in_slice(self, slice_points_xy, eps_m, min_samples):
+        """Run DBSCAN on 2D XY coordinates in a horizontal slice.
+        
+        Returns:
+            labels, num_clusters, num_noise
+        """
+        dbscan = DBSCAN(eps=eps_m, min_samples=min_samples)
+        labels = dbscan.fit_predict(slice_points_xy)
+        num_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+        num_noise = np.sum(labels == -1)
+        return labels, num_clusters, num_noise
+
+    class SliceDBSCANViewer(QDialog):
+        """Dialog to step through per-slice DBSCAN results."""
+        def __init__(self, parent, slices):
+            super().__init__(parent)
+            self.slices = slices
+            self.idx = 0
+            self.setWindowTitle("Slice DBSCAN Viewer")
+            self.resize(600, 520)
+
+            layout = QVBoxLayout(self)
+            control = QHBoxLayout()
+            self.prev_btn = QPushButton("Prev")
+            self.next_btn = QPushButton("Next")
+            self.info_label = QLabel("")
+            control.addWidget(self.prev_btn)
+            control.addWidget(self.next_btn)
+            control.addWidget(self.info_label)
+            control.addStretch()
+            layout.addLayout(control)
+
+            self.fig = Figure(figsize=(5, 4))
+            self.canvas = FigureCanvas(self.fig)
+            layout.addWidget(self.canvas)
+
+            self.prev_btn.clicked.connect(self.prev)
+            self.next_btn.clicked.connect(self.next)
+
+            self.update_plot()
+
+        def update_plot(self):
+            self.fig.clf()
+            ax = self.fig.add_subplot(111)
+            s = self.slices[self.idx]
+            pts = s['points']
+            labs = s['labels']
+            if pts is None or len(pts) == 0:
+                ax.text(0.5, 0.5, 'No points in this slice', ha='center', va='center')
+            else:
+                try:
+                    import matplotlib.cm as cm
+                    unique = np.unique(labs)
+                    colors = cm.get_cmap('tab20')(np.linspace(0, 1, max(2, len(unique))))
+                    for i, uid in enumerate(unique):
+                        mask = labs == uid
+                        if uid == -1:
+                            ax.scatter(pts[mask, 0], pts[mask, 1], c='k', s=6, label='noise')
+                        else:
+                            c = colors[i % len(colors)]
+                            ax.scatter(pts[mask, 0], pts[mask, 1], color=[c], s=8, label=f'c{uid}')
+                except Exception:
+                    ax.scatter(pts[:, 0], pts[:, 1], s=8)
+
+                ax.set_xlabel('X')
+                ax.set_ylabel('Y')
+                ax.set_aspect('equal', adjustable='datalim')
+                ax.legend(loc='upper right', fontsize='small')
+
+            ax.set_title(f"Slice {s['slice_idx']}: Z {s['z_start']:.2f}-{s['z_end']:.2f} | clusters {s['num_clusters']} noise {s['num_noise']}")
+            self.canvas.draw()
+            self.info_label.setText(f"{self.idx+1}/{len(self.slices)}")
+
+        def prev(self):
+            if self.idx > 0:
+                self.idx -= 1
+                self.update_plot()
+
+        def next(self):
+            if self.idx < len(self.slices) - 1:
+                self.idx += 1
+                self.update_plot()
+
+    def detect_trunks_in_slices(self):
+        """Detect individual trunks in the base zone using horizontal slicing + DBSCAN + vertical tracking.
+        
+        Populates self.trunk_assignment with trunk IDs in the base zone.
+        """
+        if self.current_tree_points is None:
+            QMessageBox.warning(self, "Warning", "No trunk visualized. Please visualize a trunk first.")
+            return
+
         try:
             self.log_to_console(f"\n{'='*60}")
-            self.log_to_console(f"🌳 Detecting branches using radial DBSCAN clustering...")
+            self.log_to_console(f"🌳 PHASE 1: Detecting individual trunks in base zone...")
             self.log_to_console(f"{'='*60}")
-            
-            # Get slice height parameters (same as visualization)
-            slice_height_cm = self.slice_height_input.value()
-            slice_height_m = slice_height_cm / 100.0
-            
-            # Extract coordinates
+
+            params = self.trunk_detection_params
+            params['slice_height_cm'] = self.trunk_slice_height_input.value()
+            params['base_zone_height_m'] = float(self.trunk_base_zone_input.value())
+            params['eps_m'] = float(self.trunk_eps_input.value())
+            params['min_samples'] = int(self.trunk_min_samples_input.value())
+            params['merge_dist_m'] = float(self.trunk_merge_dist_input.value())
+            params['min_trunk_points'] = int(self.trunk_min_points_input.value())
+            params['min_vertical_span_m'] = float(self.trunk_min_span_input.value())
+            params['full_height_assign_dist_m'] = float(self.trunk_full_assign_input.value())
+
+            # Record the parameter set used for this detection run and compare to last run.
+            try:
+                current_trunk_params = {
+                    'slice_height_cm': int(params.get('slice_height_cm', 0)),
+                    'base_zone_height_m': float(params.get('base_zone_height_m', 0.0)),
+                    'eps_m': float(params.get('eps_m', 0.0)),
+                    'min_samples': int(params.get('min_samples', 0)),
+                    'merge_dist_m': float(params.get('merge_dist_m', 0.0)),
+                    'min_trunk_points': int(params.get('min_trunk_points', 0)),
+                    'min_vertical_span_m': float(params.get('min_vertical_span_m', 0.0)),
+                    'full_height_assign_dist_m': float(params.get('full_height_assign_dist_m', 0.0))
+                }
+            except Exception:
+                current_trunk_params = None
+
+            slice_height_m = params['slice_height_cm'] / 100.0
+            base_zone_height_m = params['base_zone_height_m']
+            eps_m = params['eps_m']
+            min_samples = params['min_samples']
+            merge_dist_m = params['merge_dist_m']
+            min_trunk_points = params['min_trunk_points']
+            min_vertical_span_m = params['min_vertical_span_m']
+
             points = self.current_tree_points
             z_coords = points[:, 2]
             min_z = np.min(z_coords)
             max_z = np.max(z_coords)
+            trunk_height = max_z - min_z
+
+            self.log_to_console(f"📏 Trunk height: {trunk_height:.2f}m | Base zone: {base_zone_height_m:.2f}m")
+            self.log_to_console(f"🔍 Slice height: {params['slice_height_cm']}cm | DBSCAN eps: {eps_m:.2f}m, min_samples: {min_samples}")
+
+            # Use full height when base zone is set to 0.0, otherwise cap by the requested value.
+            zone_height = trunk_height if base_zone_height_m <= 0 else min(base_zone_height_m, trunk_height)
+            zone_max_z = min_z + zone_height
+            self.log_to_console(f"🎯 Base zone Z range: {min_z:.2f}m to {zone_max_z:.2f}m")
+
+            # Build slices in base zone only
+            z_coords_zone, _, _, slice_boundaries, num_slices = self._build_z_slices(
+                points[z_coords <= zone_max_z], slice_height_m
+            )
             
-            # Calculate slice boundaries
-            slice_boundaries = np.arange(min_z, max_z + slice_height_m, slice_height_m)
-            num_slices = len(slice_boundaries) - 1
+            self.log_to_console(f"📊 Total base slices: {num_slices}")
+
+            # Initialize trunk assignment for base zone
+            base_zone_mask = z_coords <= zone_max_z
+            base_zone_indices = np.where(base_zone_mask)[0]
+            base_zone_points = points[base_zone_indices]
             
-            self.log_to_console(f"📏 Slice height: {slice_height_cm}cm | Total slices: {num_slices}")
-            
-            # Initialize branch assignment array (-1 = noise, >=0 = branch_id)
-            point_to_branch = np.full(len(points), -1, dtype=int)
-            slice_cluster_map = {}  # Maps (slice_idx, local_cluster_id) to global branch_id
-            next_branch_id = 0
-            
-            # Track clusters from previous slice for vertical connectivity
-            prev_slice_clusters = {}  # Maps old_branch_id to centroid
-            
-            self.log_to_console(f"\n🔍 Running DBSCAN on each slice with eps=0.08m, min_samples=3...")
-            
-            # Process each slice
+            point_to_trunk_base = np.full(len(base_zone_indices), -1, dtype=int)
+            next_trunk_id = 0
+            prev_slice_clusters = {}  # Maps trunk_id to centroid
+            self.log_to_console(f"\n🔄 Running DBSCAN per base slice with vertical tracking...")
+
+            # Collect per-slice debug data for viewer
+            slices_debug = []
+
+            # Process each base zone slice
             for slice_idx in range(num_slices):
                 z_start = slice_boundaries[slice_idx]
                 z_end = slice_boundaries[slice_idx + 1]
-                
-                # Get points in this slice
-                slice_mask = (z_coords >= z_start) & (z_coords < z_end)
+
+                # Get points in this slice from base zone
+                slice_mask = (z_coords_zone >= z_start) & (z_coords_zone < z_end)
                 if slice_idx == num_slices - 1:
-                    slice_mask = (z_coords >= z_start) & (z_coords <= z_end)
-                
-                slice_indices = np.where(slice_mask)[0]
-                slice_points = points[slice_indices]
-                
-                if len(slice_points) < 3:
-                    self.log_to_console(f"  Slice {slice_idx}: < 3 points, skipping")
+                    slice_mask = (z_coords_zone >= z_start) & (z_coords_zone <= z_end)
+
+                slice_indices_local = np.where(slice_mask)[0]
+                slice_indices_global = base_zone_indices[slice_indices_local]
+                slice_points = base_zone_points[slice_indices_local]
+
+                if len(slice_points) < min_samples:
+                    self.log_to_console(f"  Slice {slice_idx}: < {min_samples} points, skipping")
+                    # Save empty debug entry
+                    slices_debug.append({
+                        'slice_idx': slice_idx,
+                        'z_start': z_start,
+                        'z_end': z_end,
+                        'points': np.empty((0, 2)),
+                        'labels': np.array([], dtype=int),
+                        'num_clusters': 0,
+                        'num_noise': 0
+                    })
                     continue
-                
-                # Calculate center of this slice
+
+                # Compute radial coordinates from slice center
                 center_x = np.mean(slice_points[:, 0])
                 center_y = np.mean(slice_points[:, 1])
-                
-                # Get radial coordinates (relative to center)
                 radial_coords = np.column_stack([
                     slice_points[:, 0] - center_x,
                     slice_points[:, 1] - center_y
                 ])
-                
-                # Run DBSCAN on radial coordinates
-                dbscan = DBSCAN(eps=0.08, min_samples=3)
-                local_clusters = dbscan.fit_predict(radial_coords)
-                
-                num_clusters = len(set(local_clusters)) - (1 if -1 in local_clusters else 0)
-                num_noise = np.sum(local_clusters == -1)
-                
-                self.log_to_console(f"  Slice {slice_idx}: {num_clusters} clusters, {num_noise} noise points")
-                
-                # Assign branch IDs with vertical tracking
+
+                # Run DBSCAN
+                local_labels, num_clusters, num_noise = self._cluster_xy_in_slice(radial_coords, eps_m, min_samples)
+                self.log_to_console(f"  Slice {slice_idx}: {num_clusters} clusters, {num_noise} noise")
+
+                # Save debug data (use absolute XY for display)
+                slices_debug.append({
+                    'slice_idx': slice_idx,
+                    'z_start': z_start,
+                    'z_end': z_end,
+                    'points': slice_points[:, :2].copy(),
+                    'labels': local_labels.copy(),
+                    'num_clusters': num_clusters,
+                    'num_noise': num_noise
+                })
+
+                # Assign trunk IDs with vertical tracking
                 current_slice_clusters = {}
-                for local_id in set(local_clusters):
-                    if local_id == -1:  # Skip noise points
+                for local_id in set(local_labels):
+                    if local_id == -1:
                         continue
-                    
-                    # Get points in this cluster
-                    cluster_mask = local_clusters == local_id
-                    cluster_indices = slice_indices[cluster_mask]
+
+                    cluster_mask = local_labels == local_id
+                    cluster_indices_local = slice_indices_local[cluster_mask]
+                    cluster_indices_global = slice_indices_global[cluster_mask]
                     cluster_points = slice_points[cluster_mask]
-                    
-                    # Calculate cluster centroid
+
                     centroid = np.mean(cluster_points[:, :2], axis=0)
-                    
-                    # Check if this cluster connects to a cluster from previous slice
-                    branch_id = None
+
+                    # Match to previous slice cluster
+                    trunk_id = None
                     if prev_slice_clusters:
-                        # Find closest cluster in previous slice
                         min_dist = float('inf')
                         closest_prev_id = None
                         for prev_id, prev_centroid in prev_slice_clusters.items():
@@ -4247,36 +4965,591 @@ class TreeVisualizerGUI(QMainWindow):
                             if dist < min_dist:
                                 min_dist = dist
                                 closest_prev_id = prev_id
-                        
-                        # If close enough (within 0.15m), merge with previous cluster
-                        if closest_prev_id is not None and min_dist < 0.15:
-                            branch_id = closest_prev_id
-                            self.log_to_console(f"    Cluster {local_id}: Merged with branch {branch_id} (dist={min_dist:.3f}m)")
-                    
-                    if branch_id is None:
-                        branch_id = next_branch_id
-                        next_branch_id += 1
-                        self.log_to_console(f"    Cluster {local_id}: New branch {branch_id}")
-                    
-                    # Assign branch ID to points
-                    point_to_branch[cluster_indices] = branch_id
-                    current_slice_clusters[branch_id] = centroid
-                
+
+                        if closest_prev_id is not None and min_dist < merge_dist_m:
+                            trunk_id = closest_prev_id
+                            self.log_to_console(f"    Cluster {local_id}: Merged with trunk {trunk_id} (dist={min_dist:.3f}m)")
+
+                    if trunk_id is None:
+                        trunk_id = next_trunk_id
+                        next_trunk_id += 1
+                        self.log_to_console(f"    Cluster {local_id}: New trunk {trunk_id}")
+
+                    # Assign trunk ID to points in base zone
+                    point_to_trunk_base[cluster_indices_local] = trunk_id
+                    current_slice_clusters[trunk_id] = centroid
+
                 prev_slice_clusters = current_slice_clusters
+
+            # Only show the per-slice viewer in Raw mode so it does not interrupt normal detection.
+            try:
+                show_raw_view = bool(getattr(self, 'raw_trunk_view_checkbox', None) and self.raw_trunk_view_checkbox.isChecked())
+                if show_raw_view and slices_debug:
+                    viewer = self.SliceDBSCANViewer(self, slices_debug)
+                    viewer.exec()
+            except Exception:
+                # If viewer fails, continue silently but log
+                self.log_to_console("⚠️ Failed to open slice DBSCAN viewer")
+
+            # Save raw base-zone assignment (before filtering) for QA visualization
+            try:
+                self.raw_trunk_base_assignment = point_to_trunk_base.copy()
+                self.raw_base_zone_indices = base_zone_indices.copy()
+                self.raw_slices_debug = slices_debug
+            except Exception:
+                pass
+
+            # Filter trunks by quality criteria
+            unique_trunks = np.unique(point_to_trunk_base)
+            valid_trunks = []
+
+            self.log_to_console(f"\n✅ Base zone clustering complete. Filtering by quality criteria...")
+            self.log_to_console(f"   Min points: {min_trunk_points} | Min vertical span: {min_vertical_span_m:.2f}m")
+
+            for trunk_id in unique_trunks:
+                if trunk_id == -1:
+                    continue
+
+                mask = point_to_trunk_base == trunk_id
+                trunk_points = base_zone_points[mask]
+                trunk_size = len(trunk_points)
+                z_span = np.max(trunk_points[:, 2]) - np.min(trunk_points[:, 2])
+
+                if trunk_size >= min_trunk_points and z_span >= min_vertical_span_m:
+                    valid_trunks.append(trunk_id)
+                    self.log_to_console(f"  Trunk {trunk_id}: {trunk_size} points, z_span={z_span:.2f}m ✓")
+                else:
+                    self.log_to_console(f"  Trunk {trunk_id}: {trunk_size} points, z_span={z_span:.2f}m ✗ (rejected)")
+
+            # Re-index valid trunks to 0..N-1
+            trunk_remap = {old_id: new_id for new_id, old_id in enumerate(valid_trunks)}
+            remapped_base = np.full(len(point_to_trunk_base), -1, dtype=int)
+            for old_id, new_id in trunk_remap.items():
+                remapped_base[point_to_trunk_base == old_id] = new_id
+
+            point_to_trunk_base = remapped_base
+
+            # Store base zone assignment and prepare for full height extension
+            self.trunk_assignment = np.full(len(points), -1, dtype=int)
+            self.trunk_assignment[base_zone_indices] = point_to_trunk_base
+
+            self.log_to_console(f"\n📌 Base zone assignment complete: {len(valid_trunks)} valid trunks detected")
+            self.log_to_console(f"   Noise points in base: {np.sum(point_to_trunk_base == -1)}")
+
+            # Extend assignment to full height
+            self._assign_points_to_trunks_full_height()
+
+            # Auto-visualize detected trunks immediately after detection
+            self.log_to_console(f"\n✅ Trunk detection complete. Auto-visualizing trunks...")
+            self.visualize_trunks_from_assignment()
+            # Compare current params with last used params; only bump version when parameters changed
+            try:
+                if current_trunk_params is not None and current_trunk_params != getattr(self, '_last_trunk_detection_params', None):
+                    self._last_trunk_detection_params = current_trunk_params
+                    try:
+                        self._trunk_detection_version = int(getattr(self, '_trunk_detection_version', 0)) + 1
+                    except Exception:
+                        self._trunk_detection_version = getattr(self, '_trunk_detection_version', 0) + 1
+                    self.log_to_console(f"🔁 Trunk detection parameters changed; version updated: {self._trunk_detection_version}")
+                else:
+                    self.log_to_console("ℹ️ Trunk detection run used same parameters as last run; detection version unchanged.")
+            except Exception:
+                # On any error, conservatively bump version
+                try:
+                    self._trunk_detection_version = int(getattr(self, '_trunk_detection_version', 0)) + 1
+                except Exception:
+                    self._trunk_detection_version = getattr(self, '_trunk_detection_version', 0) + 1
+                self.log_to_console(f"🔁 Trunk detection version updated (fallback): {self._trunk_detection_version}")
+
+        except Exception as e:
+            self.log_to_console(f"❌ Error detecting trunks in base zone: {str(e)}")
+            import traceback
+            self.log_to_console(traceback.format_exc())
+            QMessageBox.critical(self, "Error", f"Failed to detect trunks:\n{str(e)}")
+
+    def _assign_points_to_trunks_full_height(self):
+        """Extend trunk assignment from base zone to full tree height using nearest neighbor.
+        
+        Uses self.trunk_assignment (populated in base zone by detect_trunks_in_slices).
+        Assigns remaining points (-1) to nearest trunk trajectory.
+        """
+        if self.trunk_assignment is None or self.current_tree_points is None:
+            self.log_to_console("⚠️ Cannot extend trunk assignment: base zone assignment not ready")
+            return
+
+        points = self.current_tree_points
+        unassigned_mask = self.trunk_assignment == -1
+
+        if not np.any(unassigned_mask):
+            self.log_to_console("ℹ️ All points assigned in base zone. No extension needed.")
+            return
+
+        self.log_to_console(f"\n🔗 Extending trunk assignment to full height...")
+        max_assign_dist = self.trunk_detection_params['full_height_assign_dist_m']
+
+        # Build KDTree of assigned points per trunk
+        assigned_mask = self.trunk_assignment >= 0
+        assigned_points = points[assigned_mask]
+        assigned_trunk_ids = self.trunk_assignment[assigned_mask]
+        assigned_tree = KDTree(assigned_points[:, :2])  # XY only
+
+        unassigned_indices = np.where(unassigned_mask)[0]
+        unassigned_points = points[unassigned_indices]
+
+        # For each unassigned point, find nearest assigned point and use its trunk ID
+        distances, indices = assigned_tree.query(unassigned_points[:, :2], k=1)
+
+        extended_count = 0
+        for i, (dist, idx) in enumerate(zip(distances, indices)):
+            if dist <= max_assign_dist:
+                nearest_trunk = assigned_trunk_ids[idx]
+                self.trunk_assignment[unassigned_indices[i]] = nearest_trunk
+                extended_count += 1
+
+        self.log_to_console(f"   Extended {extended_count}/{len(unassigned_indices)} unassigned points")
+        self.log_to_console(f"   Points still unassigned (noise): {np.sum(self.trunk_assignment == -1)}")
+
+    def visualize_trunks_from_assignment(self):
+        """Visualize trunks using colors from self.trunk_assignment (Phase 2 QA visualization).
+        
+        Each trunk gets a distinct color.
+        """
+        if self.trunk_assignment is None:
+            self.log_to_console("⚠️ No trunk assignment available for visualization")
+            return
+
+        try:
+            self.log_to_console(f"\n🎨 Visualizing trunks...")
+            show_raw = bool(getattr(self, 'raw_trunk_view_checkbox', None) and self.raw_trunk_view_checkbox.isChecked())
+
+            # Clear current visualization
+            self.plotter.clear()
+
+            # Show raw detections when requested, otherwise show filtered trunks.
+            if show_raw and hasattr(self, 'raw_trunk_base_assignment'):
+                self.log_to_console("   Raw view enabled: showing raw base-zone detections")
+
+                raw_assign = self.raw_trunk_base_assignment
+                raw_indices = self.raw_base_zone_indices
+                raw_unique = np.unique(raw_assign)
+                raw_unique = raw_unique[raw_unique >= 0]
+                num_raw = len(raw_unique)
+
+                # Create colors
+                import matplotlib.cm as cm
+                import warnings
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", DeprecationWarning)
+                    if num_raw <= 10:
+                        cmap = cm.get_cmap('tab10')
+                    elif num_raw <= 20:
+                        cmap = cm.get_cmap('tab20')
+                    else:
+                        cmap = cm.get_cmap('hsv')
+
+                colors = cmap(np.linspace(0, 1, max(1, num_raw)))
+
+                # Render each raw detected trunk (base zone only)
+                for i, raw_id in enumerate(raw_unique):
+                    mask = raw_assign == raw_id
+                    global_inds = raw_indices[mask]
+                    trunk_points = self.current_tree_points[global_inds]
+
+                    if len(trunk_points) > 0:
+                        color = colors[i % len(colors)]
+                        rgb_color = [float(color[0]), float(color[1]), float(color[2])]
+                        self.plotter.add_points(
+                            trunk_points,
+                            color=rgb_color,
+                            point_size=5,
+                            name=f'RawTrunk_{raw_id}'
+                        )
+                        self.log_to_console(f"RAW {raw_id:<8} {len(trunk_points):<8} (base-zone)")
+
+                # Add raw noise in base zone
+                noise_mask = raw_assign == -1
+                if np.any(noise_mask):
+                    noise_global = raw_indices[noise_mask]
+                    noise_points = self.current_tree_points[noise_global]
+                    self.plotter.add_points(
+                        noise_points,
+                        color=[0.5, 0.5, 0.5],
+                        point_size=3,
+                        name='RawNoise'
+                    )
+                    self.log_to_console(f"{'RAW_NOISE':<10} {len(noise_points):<8} (base-zone)")
+
+                # Update viewer
+                self.plotter.reset_camera()
+                self.plotter.update()
+                self.log_to_console("\n✅ Raw base-zone trunk visualization complete (unfiltered results).")
+                return
+
+            # Get unique trunk IDs
+            unique_trunks = np.unique(self.trunk_assignment)
+            unique_trunks = unique_trunks[unique_trunks >= 0]
+
+            num_trunks = len(unique_trunks)
+            self.log_to_console(f"   Rendering {num_trunks} trunks...")
+
+            # If no filtered trunks found, but raw base-zone detections exist, show them for QA
+            if num_trunks == 0 and hasattr(self, 'raw_trunk_base_assignment'):
+                self.log_to_console("   No filtered trunks — falling back to raw base-zone clusters for QA visualization")
+
+                raw_assign = self.raw_trunk_base_assignment
+                raw_indices = self.raw_base_zone_indices
+                raw_unique = np.unique(raw_assign)
+                raw_unique = raw_unique[raw_unique >= 0]
+                num_raw = len(raw_unique)
+
+                # Create colors
+                import matplotlib.cm as cm
+                import warnings
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", DeprecationWarning)
+                    if num_raw <= 10:
+                        cmap = cm.get_cmap('tab10')
+                    elif num_raw <= 20:
+                        cmap = cm.get_cmap('tab20')
+                    else:
+                        cmap = cm.get_cmap('hsv')
+
+                colors = cmap(np.linspace(0, 1, max(1, num_raw)))
+
+                # Render each raw detected trunk (base zone only)
+                for i, raw_id in enumerate(raw_unique):
+                    mask = raw_assign == raw_id
+                    global_inds = raw_indices[mask]
+                    trunk_points = self.current_tree_points[global_inds]
+
+                    if len(trunk_points) > 0:
+                        color = colors[i % len(colors)]
+                        rgb_color = [float(color[0]), float(color[1]), float(color[2])]
+                        self.plotter.add_points(
+                            trunk_points,
+                            color=rgb_color,
+                            point_size=5,
+                            name=f'RawTrunk_{raw_id}'
+                        )
+                        self.log_to_console(f"RAW {raw_id:<8} {len(trunk_points):<8} (base-zone)")
+
+                # Add raw noise in base zone
+                noise_mask = raw_assign == -1
+                if np.any(noise_mask):
+                    noise_global = raw_indices[noise_mask]
+                    noise_points = self.current_tree_points[noise_global]
+                    self.plotter.add_points(
+                        noise_points,
+                        color=[0.5, 0.5, 0.5],
+                        point_size=3,
+                        name='RawNoise'
+                    )
+                    self.log_to_console(f"{'RAW_NOISE':<10} {len(noise_points):<8} (base-zone)")
+
+                # Update viewer
+                self.plotter.reset_camera()
+                self.plotter.update()
+                self.log_to_console("\n✅ Raw base-zone trunk visualization complete (unfiltered results).")
+                return
+
+            # Create color palette
+            import matplotlib.cm as cm
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                if num_trunks <= 10:
+                    cmap = cm.get_cmap('tab10')
+                elif num_trunks <= 20:
+                    cmap = cm.get_cmap('tab20')
+                else:
+                    cmap = cm.get_cmap('hsv')
+
+            colors = cmap(np.linspace(0, 1, num_trunks))
+
+            # Log trunk statistics
+            self.log_to_console(f"\n📋 TRUNK DETAILS:")
+            self.log_to_console(f"{'Trunk ID':<10} {'Size':<8} {'Min Z':<8} {'Max Z':<8} {'Height':<8}")
+            self.log_to_console(f"-" * 50)
+
+            # Render each trunk
+            for i, trunk_id in enumerate(unique_trunks):
+                mask = self.trunk_assignment == trunk_id
+                trunk_points = self.current_tree_points[mask]
+
+                if len(trunk_points) > 0:
+                    size = len(trunk_points)
+                    min_z = np.min(trunk_points[:, 2])
+                    max_z = np.max(trunk_points[:, 2])
+                    height = max_z - min_z
+
+                    color = colors[i % len(colors)]
+                    rgb_color = [float(color[0]), float(color[1]), float(color[2])]
+
+                    self.plotter.add_points(
+                        trunk_points,
+                        color=rgb_color,
+                        point_size=5,
+                        name=f'Trunk_{trunk_id}'
+                    )
+
+                    # Add trunk ID label at the centroid of the trunk
+                    centroid = np.mean(trunk_points, axis=0)
+                    try:
+                        self.plotter.add_point_labels(
+                            np.array([centroid]),
+                            [f'T{trunk_id}'],
+                            font_size=14,
+                            text_color='white',
+                            name=f'Label_Trunk_{trunk_id}'
+                        )
+                    except Exception:
+                        pass  # Label failed; skip silently
+
+                    self.log_to_console(f"{trunk_id:<10} {size:<8} {min_z:<8.2f} {max_z:<8.2f} {height:<8.2f}")
+
+            # Add legend
+            try:
+                self.plotter.add_legend()
+            except:
+                pass
+
+            self.plotter.reset_camera()
+            self.plotter.update()
+
+            # Noise points
+            noise_mask = self.trunk_assignment == -1
+            if np.any(noise_mask):
+                self.log_to_console(f"{'NOISE':<10} {np.sum(noise_mask):<8}")
+
+            self.log_to_console(f"\n✅ Trunk visualization complete!")
+
+        except Exception as e:
+            self.log_to_console(f"❌ Error visualizing trunks: {str(e)}")
+            import traceback
+            self.log_to_console(traceback.format_exc())
+            QMessageBox.critical(self, "Error", f"Failed to visualize trunks:\n{str(e)}")
+
+    # ======================== EXISTING BRANCH DETECTION (to be refactored in Phase 3) ========================
+
+    def detect_branch_clusters_in_slices(self):
+        """Detect individual branches using DBSCAN on radial coordinates within each height slice."""
+        if self.current_tree_points is None:
+            QMessageBox.warning(self, "Warning", "No trunk visualized. Please visualize a trunk first.")
+            return
+        if self.trunk_assignment is None or len(self.trunk_assignment) != len(self.current_tree_points):
+            QMessageBox.warning(self, "Warning", "No trunk assignment available. Please run trunk detection first.")
+            return
+        
+        try:
+            self.log_to_console(f"\n{'='*60}")
+            self.log_to_console(f"🌳 Detecting branches using radial DBSCAN clustering per trunk...")
+            self.log_to_console(f"{'='*60}")
+            
+            # Get slice height parameters (same as visualization)
+            slice_height_cm = self.slice_height_input.value()
+            slice_height_m = slice_height_cm / 100.0
+            branch_eps = float(self.branch_eps_input.value())
+            branch_min_samples = int(self.branch_min_samples_input.value())
+            branch_merge_dist = float(self.branch_merge_dist_input.value())
+
+            # Capture current branch detection params and compare to last run
+            try:
+                current_branch_params = {
+                    'slice_height_cm': int(slice_height_cm),
+                    'branch_eps': float(branch_eps),
+                    'branch_min_samples': int(branch_min_samples),
+                    'branch_merge_dist': float(branch_merge_dist)
+                }
+            except Exception:
+                current_branch_params = None
+            
+            # Extract coordinates
+            points = self.current_tree_points
+            trunk_ids = np.unique(self.trunk_assignment)
+            trunk_ids = trunk_ids[trunk_ids >= 0]
+
+            if len(trunk_ids) == 0:
+                QMessageBox.warning(self, "Warning", "No trunk IDs found. Please run trunk detection first.")
+                return
+            
+            # Initialize branch assignment array (-1 = noise, >=0 = branch_id)
+            point_to_branch = np.full(len(points), -1, dtype=int)
+            self.branch_meta = {}
+            next_branch_id = 0
+
+            total_branches_detected = 0
+            total_classified_points = 0
+
+            self.log_to_console(f"📏 Slice height: {slice_height_cm}cm | Branch DBSCAN eps={branch_eps:.2f}m | min_samples={branch_min_samples}")
+            self.log_to_console(f"🔎 Processing {len(trunk_ids)} trunk(s) independently...")
+
+            # Process each trunk independently so branch IDs belong to a specific trunk.
+            for trunk_id in trunk_ids:
+                trunk_mask = self.trunk_assignment == trunk_id
+                trunk_indices = np.where(trunk_mask)[0]
+                trunk_points = points[trunk_indices]
+
+                if len(trunk_points) < branch_min_samples:
+                    self.log_to_console(f"  Trunk {trunk_id}: < {branch_min_samples} points, skipping")
+                    continue
+
+                trunk_z = trunk_points[:, 2]
+                min_z = np.min(trunk_z)
+                max_z = np.max(trunk_z)
+                slice_boundaries = np.arange(min_z, max_z + slice_height_m, slice_height_m)
+                if len(slice_boundaries) < 2:
+                    slice_boundaries = np.array([min_z, max_z + slice_height_m], dtype=float)
+                num_slices = len(slice_boundaries) - 1
+
+                self.log_to_console(f"  Trunk {trunk_id}: slice height {slice_height_cm}cm | slices {num_slices} | z=[{min_z:.2f}, {max_z:.2f}]")
+
+                # Track clusters from previous slice for vertical connectivity within this trunk only.
+                prev_slice_clusters = {}
+                trunk_local_branch_id = 0
+
+                for slice_idx in range(num_slices):
+                    z_start = slice_boundaries[slice_idx]
+                    z_end = slice_boundaries[slice_idx + 1]
+
+                    slice_mask = (trunk_z >= z_start) & (trunk_z < z_end)
+                    if slice_idx == num_slices - 1:
+                        slice_mask = (trunk_z >= z_start) & (trunk_z <= z_end)
+
+                    slice_local_indices = np.where(slice_mask)[0]
+                    slice_points = trunk_points[slice_local_indices]
+
+                    if len(slice_points) < branch_min_samples:
+                        self.log_to_console(f"    Slice {slice_idx}: < {branch_min_samples} points, skipping")
+                        continue
+
+                    center_x = np.mean(slice_points[:, 0])
+                    center_y = np.mean(slice_points[:, 1])
+
+                    radial_coords = np.column_stack([
+                        slice_points[:, 0] - center_x,
+                        slice_points[:, 1] - center_y
+                    ])
+
+                    dbscan = DBSCAN(eps=branch_eps, min_samples=branch_min_samples)
+                    local_clusters = dbscan.fit_predict(radial_coords)
+
+                    num_clusters = len(set(local_clusters)) - (1 if -1 in local_clusters else 0)
+                    num_noise = np.sum(local_clusters == -1)
+                    self.log_to_console(f"    Slice {slice_idx}: {num_clusters} clusters, {num_noise} noise points")
+
+                    current_slice_clusters = {}
+                    for local_id in np.unique(local_clusters):
+                        if local_id == -1:
+                            continue
+
+                        cluster_mask = local_clusters == local_id
+                        cluster_local_indices = slice_local_indices[cluster_mask]
+                        cluster_indices = trunk_indices[cluster_local_indices]
+                        cluster_points = slice_points[cluster_mask]
+
+                        centroid = np.mean(cluster_points[:, :2], axis=0)
+                        cluster_z_min = float(np.min(cluster_points[:, 2]))
+                        cluster_z_max = float(np.max(cluster_points[:, 2]))
+
+                        branch_id = None
+                        if prev_slice_clusters:
+                            min_dist = float('inf')
+                            closest_prev_id = None
+                            for prev_id, prev_centroid in prev_slice_clusters.items():
+                                dist = np.linalg.norm(centroid - prev_centroid)
+                                if dist < min_dist:
+                                    min_dist = dist
+                                    closest_prev_id = prev_id
+
+                            if closest_prev_id is not None and min_dist < branch_merge_dist:
+                                branch_id = closest_prev_id
+                                meta = self.branch_meta.get(branch_id, {})
+                                local_branch_id = meta.get('local_id', branch_id)
+                                self.log_to_console(
+                                    f"      Cluster {local_id}: Merged with trunk {trunk_id} branch B{local_branch_id} "
+                                    f"(global {branch_id}, dist={min_dist:.3f}m)"
+                                )
+
+                        if branch_id is None:
+                            branch_id = next_branch_id
+                            next_branch_id += 1
+                            local_branch_id = trunk_local_branch_id
+                            trunk_local_branch_id += 1
+                            self.branch_meta[branch_id] = {
+                                'trunk_id': int(trunk_id),
+                                'local_id': int(local_branch_id),
+                                'point_count': 0,
+                                'z_span': (cluster_z_min, cluster_z_max)
+                            }
+                            self.log_to_console(
+                                f"      Cluster {local_id}: New branch T{trunk_id}.B{local_branch_id} (global {branch_id})"
+                            )
+
+                        point_to_branch[cluster_indices] = branch_id
+                        current_slice_clusters[branch_id] = centroid
+
+                        meta = self.branch_meta.setdefault(branch_id, {
+                            'trunk_id': int(trunk_id),
+                            'local_id': int(branch_id),
+                            'point_count': 0,
+                            'z_span': (cluster_z_min, cluster_z_max)
+                        })
+                        meta['trunk_id'] = int(trunk_id)
+                        meta.setdefault('local_id', int(branch_id))
+                        meta['point_count'] = int(meta.get('point_count', 0) + len(cluster_indices))
+                        old_min_z, old_max_z = meta.get('z_span', (cluster_z_min, cluster_z_max))
+                        meta['z_span'] = (min(float(old_min_z), cluster_z_min), max(float(old_max_z), cluster_z_max))
+
+                    prev_slice_clusters = current_slice_clusters
+
+                trunk_branch_ids = sorted(int(branch_id) for branch_id in np.unique(point_to_branch[trunk_indices]) if int(branch_id) >= 0)
+                trunk_classified = int(np.sum(point_to_branch[trunk_indices] >= 0))
+                total_classified_points += trunk_classified
+                total_branches_detected += len(trunk_branch_ids)
+                self.log_to_console(
+                    f"  Trunk {trunk_id}: {len(trunk_branch_ids)} branch(es), {trunk_classified} classified point(s)"
+                )
             
             # Store branch assignment
             self.branch_assignment = point_to_branch
             
             self.log_to_console(f"\n✅ Branch detection complete!")
-            self.log_to_console(f"   Total unique branches: {np.max(point_to_branch) + 1}")
+            self.log_to_console(f"   Total unique branches: {len([b for b in np.unique(point_to_branch) if b >= 0])}")
+            self.log_to_console(f"   Total trunk-scoped branches: {total_branches_detected}")
+            self.log_to_console(f"   Classified branch points: {total_classified_points}")
             self.log_to_console(f"   Noise points: {np.sum(point_to_branch == -1)}")
             
             # Store branch assignment in memory for visualization and export
             # (LAS field modification may be handled during save operation)
             self.log_to_console(f"✅ Branch assignment stored in memory for visualization")
+            # Enable selection and volume tools now that branch detection exists
+            try:
+                if hasattr(self, 'select_all_points_button'):
+                    self.select_all_points_button.setEnabled(True)
+                if hasattr(self, 'volume_calc_button'):
+                    self.volume_calc_button.setEnabled(True)
+            except Exception:
+                pass
             
             # Visualize branches with different colors
             self.visualize_branches_from_assignment()
+            # Only bump branch detection version if parameters changed since last run
+            try:
+                if current_branch_params is not None and current_branch_params != getattr(self, '_last_branch_detection_params', None):
+                    self._last_branch_detection_params = current_branch_params
+                    try:
+                        self._branch_detection_version = int(getattr(self, '_branch_detection_version', 0)) + 1
+                    except Exception:
+                        self._branch_detection_version = getattr(self, '_branch_detection_version', 0) + 1
+                    self.log_to_console(f"🔁 Branch detection parameters changed; version updated: {self._branch_detection_version}")
+                else:
+                    self.log_to_console("ℹ️ Branch detection run used same parameters as last run; detection version unchanged.")
+            except Exception:
+                try:
+                    self._branch_detection_version = int(getattr(self, '_branch_detection_version', 0)) + 1
+                except Exception:
+                    self._branch_detection_version = getattr(self, '_branch_detection_version', 0) + 1
+                self.log_to_console(f"🔁 Branch detection version updated (fallback): {self._branch_detection_version}")
             
         except Exception as e:
             self.log_to_console(f"❌ Error detecting branch clusters: {str(e)}")
@@ -4319,11 +5592,10 @@ class TreeVisualizerGUI(QMainWindow):
             
             # Calculate branch statistics for console output
             self.log_to_console(f"\n📋 BRANCH DETAILS:")
-            self.log_to_console(f"{'Branch ID':<12} {'Size':<8} {'Min Z':<8} {'Max Z':<8} {'Height':<8} {'Δ Height':<12}")
-            self.log_to_console(f"-" * 66)
+            self.log_to_console(f"{'Branch ID':<12} {'Trunk':<8} {'Local':<8} {'Size':<8} {'Min Z':<8} {'Max Z':<8} {'Height':<8}")
+            self.log_to_console(f"-" * 74)
             
             branch_info = {}
-            branch_centroids = {}
             
             # Add each branch with unique color and information
             for i, branch_id in enumerate(unique_branches):
@@ -4337,6 +5609,9 @@ class TreeVisualizerGUI(QMainWindow):
                     max_z = np.max(branch_points[:, 2])
                     height = max_z - min_z
                     centroid = np.mean(branch_points, axis=0)
+                    branch_meta = self.branch_meta.get(int(branch_id), {}) if hasattr(self, 'branch_meta') else {}
+                    trunk_id = branch_meta.get('trunk_id', '?')
+                    local_id = branch_meta.get('local_id', branch_id)
                     
                     # Store for labeling
                     branch_info[branch_id] = {
@@ -4346,12 +5621,10 @@ class TreeVisualizerGUI(QMainWindow):
                         'height': height,
                         'centroid': centroid
                     }
-                    branch_centroids[branch_id] = centroid
                     
                     # Log statistics
                     self.log_to_console(
-                        f"{branch_id:<12} {size:<8} {min_z:<8.2f} {max_z:<8.2f} "
-                        f"{height:<8.2f} {max_z - min_z:<12.2f}"
+                        f"{branch_id:<12} {trunk_id:<8} {local_id:<8} {size:<8} {min_z:<8.2f} {max_z:<8.2f} {height:<8.2f}"
                     )
                     
                     # Add points with color
@@ -4367,9 +5640,13 @@ class TreeVisualizerGUI(QMainWindow):
                     
                     # Add label at branch centroid
                     try:
+                        if trunk_id == '?':
+                            label_text = f'B{branch_id}'
+                        else:
+                            label_text = f'T{trunk_id}.B{local_id}'
                         self.plotter.add_point_labels(
                             np.array([centroid]),
-                            [f'B{branch_id}'],
+                            [label_text],
                             font_size=12,
                             text_color='white',
                             name=f'Label_Branch_{branch_id}'
@@ -5048,88 +6325,9 @@ Important:
             QMessageBox.warning(self, "DBH Extraction Error", f"Error extracting DBH components: {str(e)}")
             print(f"DBH component extraction error: {e}")
 
-    def visualize_dbh_circles(self):
-        """
-        Visualize circle fitting trajectory for DBH points in 3D.
-        Shows only the circle fitting without component analysis.
-        """
-        if not hasattr(self, 'current_tree_points') or self.current_tree_points is None:
-            QMessageBox.warning(self, "No Tree Points", "No tree points available. Please visualize a tree first.")
-            return
 
-        if self.las_data is None or 'dbh_points' not in self.las_data.point_format.dimension_names:
-            QMessageBox.warning(self, "No DBH Points", "DBH points field not found. Please run split detection first.")
-            return
 
-        try:
-            # Get DBH points for the current tree
-            if self.current_mask is None:
-                QMessageBox.warning(self, "No Tree Selected", "No tree is currently selected.")
-                return
-
-            tree_indices = np.where(self.current_mask)[0]
-            dbh_values = np.array(self.las_data['dbh_points'])[tree_indices]
-            dbh_mask = dbh_values == 1
-
-            if not np.any(dbh_mask):
-                QMessageBox.warning(self, "No DBH Points", "No DBH points found for the current tree.")
-                return
-
-            # Extract DBH point coordinates
-            dbh_indices = tree_indices[dbh_mask]
-            dbh_points = np.column_stack([
-                np.array(self.las_data.x)[dbh_indices],
-                np.array(self.las_data.y)[dbh_indices],
-                np.array(self.las_data.z)[dbh_indices]
-            ])
-
-            self.log_to_console(f"📏 Visualizing circle fitting for {len(dbh_points)} DBH points")
-
-            # Visualize DBH points and circle fitting
-            self._visualize_dbh_circles_only(dbh_points)
-
-            QMessageBox.information(self, "DBH Circle Fitting",
-                                  f"Successfully visualized circle fitting for {len(dbh_points)} DBH points")
-
-        except Exception as e:
-            QMessageBox.warning(self, "DBH Circle Visualization Error", f"Error visualizing DBH circles: {str(e)}")
-            print(f"DBH circle visualization error: {e}")
-
-    def _visualize_dbh_circles_only(self, dbh_points):
-        """Visualize only the DBH points with circle fitting trajectory."""
-        if self.plotter is None or len(dbh_points) == 0:
-            return
-
-        try:
-            self.plotter.clear()
-
-            # Show DBH points
-            dbh_cloud = pv.PolyData(dbh_points)
-            self.plotter.add_points(dbh_cloud, color='orange', point_size=3, opacity=0.7,
-                                  name='dbh_points', label=f'DBH Points ({len(dbh_points)} pts)')
-
-            # Add circle fitting
-            self._add_dbh_circle_fitting(dbh_points)
-
-            # Add information text
-            min_z = np.min(dbh_points[:, 2])
-            max_z = np.max(dbh_points[:, 2])
-            height_range = max_z - min_z
-
-            info_text = (f"DBH Circle Fitting Visualization\n"
-                        f"Height Range: {min_z:.2f}m to {max_z:.2f}m\n"
-                        f"Total Height: {height_range:.2f}m\n"
-                        f"Total DBH Points: {len(dbh_points)}")
-
-            self.plotter.add_text(info_text, position='upper_left', font_size=10, color='#FFFFFF')
-
-            self.plotter.reset_camera()
-
-        except Exception as e:
-            self.log_to_console(f"❌ Error in DBH circles only visualization: {str(e)}")
-            print(f"Error in _visualize_dbh_circles_only: {e}")
-
-    def _add_dbh_circle_fitting_for_section(self, dbh_points, section_id, circle_color, avg_color, measurement_label="DBH"):
+    def _add_dbh_circle_fitting_for_section(self, dbh_points, section_id, circle_color, avg_color, measurement_label="DBH", run_id=None):
         """Add circle fitting visualization for section points with section-specific naming and colors."""
         if len(dbh_points) == 0:
             return {'circles': [], 'avg_radius': 0.0, 'height_range': 0.0}
@@ -5177,9 +6375,10 @@ Important:
             centers_cloud = pv.PolyData(centers_array)
 
             # Use white spheres for trajectory points
+            trajectory_name = f'dbh_trajectory_section_{section_id}' if run_id is None else f'dbh_trajectory_run_{run_id}_section_{section_id}'
             self.plotter.add_mesh(centers_cloud, color='white', point_size=8,
                                 render_points_as_spheres=True, opacity=1.0,
-                                name=f'dbh_trajectory_section_{section_id}', label=f'Section {section_id} Trajectory ({len(circle_centers)} pts)')
+                                name=trajectory_name, label=f'Section {section_id} Trajectory ({len(circle_centers)} pts)')
 
             # Compute average center and radius for all circles
             avg_x = np.mean([c[0] for c in circle_centers])
@@ -5208,56 +6407,49 @@ Important:
                     merged_individual = merged_individual + circle
 
                 # Add the merged mesh to the plotter
+                individual_name = f'dbh_individual_circles_section_{section_id}' if run_id is None else f'dbh_individual_circles_run_{run_id}_section_{section_id}'
                 self.plotter.add_mesh(merged_individual, color=circle_color, opacity=0.3,
-                                    name=f'dbh_individual_circles_section_{section_id}',
+                                    name=individual_name,
                                     label=f'Section {section_id} Individual Circles ({len(circle_centers)} circles)')
 
             # Add average circle at EVERY height level where individual circles exist
-            self._add_average_dbh_circles_for_section(circle_centers, final_center, final_radius, section_id, avg_color)
+            self._add_average_dbh_circles_for_section(circle_centers, final_center, final_radius, section_id, avg_color, run_id=run_id)
 
             self.log_to_console(f"📊 Added section {section_id} with {len(circle_centers)} {measurement_label} circles")
 
-            # Extract DBH at 1.3m from min_z using the AVERAGE radius (same as red circles)
+            # Extract DBH at 1.3m above the tree base using the AVERAGE radius (same as red circles)
+            # Only compute DBH when this section contains the global DBH height.
             dbh_at_1_3m = None
             dbh_center_at_1_3m = None
             dbh_z_at_1_3m = None
             target_height = 1.3  # Standard DBH height
-            
-            # Check if 1.3m height is within the section's range
-            if len(circle_heights) > 0 and height_range >= target_height:
-                # Use the global average radius (same as red circles) for DBH
-                avg_radius_at_1_3m = final_radius  # Use the average radius from all circles
-                dbh_at_1_3m = avg_radius_at_1_3m * 2  # Diameter
-                
-                # Use average center for visualization
-                dbh_center_at_1_3m = np.array([final_center[0], final_center[1], min_z + target_height])
-                dbh_z_at_1_3m = min_z + target_height
-                
-                self.log_to_console(f"🌳 {measurement_label} at 1.3m from min_z: {dbh_at_1_3m*100:.1f} cm (avg radius: {avg_radius_at_1_3m*100:.1f} cm)")
-                
-                # Visualize DBH circle at 1.3m with green color
-                dbh_circle = pv.Circle(radius=float(avg_radius_at_1_3m), resolution=64)
-                dbh_circle.translate([float(dbh_center_at_1_3m[0]), float(dbh_center_at_1_3m[1]), float(dbh_z_at_1_3m)], inplace=True)
-                self.plotter.add_mesh(dbh_circle, color='green', opacity=0.8, line_width=3,
-                                    style='wireframe',
-                                    name=f'dbh_1_3m_circle_section_{section_id}',
-                                    label=f'Section {section_id} {measurement_label} @1.3m: {dbh_at_1_3m*100:.1f}cm')
-                
-                # Add a horizontal plane at 1.3m to indicate DBH measurement level
-                plane_size = float(avg_radius_at_1_3m * 2.5)  # Slightly larger than diameter
-                dbh_plane = pv.Plane(center=[float(dbh_center_at_1_3m[0]), float(dbh_center_at_1_3m[1]), float(dbh_z_at_1_3m)],
-                                    direction=[0, 0, 1], i_size=plane_size, j_size=plane_size)
-                self.plotter.add_mesh(dbh_plane, color='green', opacity=0.2,
-                                    name=f'dbh_1_3m_plane_section_{section_id}',
-                                    label=f'Section {section_id} {measurement_label} Plane @1.3m')
-                
-                # Add text label for DBH
-                dbh_label_pos = [float(dbh_center_at_1_3m[0] + plane_size/2), float(dbh_center_at_1_3m[1]), float(dbh_z_at_1_3m)]
-                self.plotter.add_point_labels([dbh_label_pos], [f'{measurement_label}: {dbh_at_1_3m*100:.1f}cm'],
-                                             font_size=12, text_color='green', point_size=0,
-                                             name=f'dbh_1_3m_label_section_{section_id}')
-            else:
-                self.log_to_console(f"⚠️ Section height range ({height_range:.2f}m) doesn't reach 1.3m for {measurement_label} measurement")
+            tree_base_z = float(np.min(self.current_tree_points[:, 2])) if hasattr(self, 'current_tree_points') and self.current_tree_points is not None else float(min_z)
+            dbh_target_z = tree_base_z + target_height
+
+            if len(circle_heights) > 0:
+                section_min_z = float(min_z)
+                section_max_z = float(max_z)
+
+                if section_min_z <= dbh_target_z <= section_max_z:
+                    # Use the fitted circle closest to the global DBH target height.
+                    circle_zs = np.array([center[2] for center in circle_centers], dtype=float)
+                    target_idx = int(np.argmin(np.abs(circle_zs - dbh_target_z)))
+                    avg_radius_at_1_3m = float(circle_radii[target_idx])
+                    dbh_at_1_3m = avg_radius_at_1_3m * 2  # Diameter
+
+                    # Use the selected circle center for visualization
+                    dbh_center_at_1_3m = np.array([circle_centers[target_idx][0], circle_centers[target_idx][1], dbh_target_z])
+                    dbh_z_at_1_3m = dbh_target_z
+
+                    self.log_to_console(f"🌳 DBH at 1.3m above base: {dbh_at_1_3m*100:.1f} cm (radius at target Z: {avg_radius_at_1_3m*100:.1f} cm)")
+
+                    # DBH visualization at section level has been removed to avoid duplicate/green overlays.
+                    # DBH value is still calculated and returned in section data; trunk-level (blue) overlays
+                    # are used for display instead.
+                elif measurement_label.lower() == "diameter":
+                    self.log_to_console(f"⚠️ Section height range ({height_range:.2f}m) does not include DBH height at {dbh_target_z:.2f}m")
+                else:
+                    self.log_to_console(f"⚠️ Section height range ({height_range:.2f}m) doesn't reach 1.3m for {measurement_label} measurement")
 
             # Return circle data for volume calculation
             return {
@@ -5269,11 +6461,12 @@ Important:
                 'max_z': max_z,
                 'dbh_at_1_3m': dbh_at_1_3m,  # Diameter at 1.3m in meters (using avg radius)
                 'dbh_center_at_1_3m': dbh_center_at_1_3m.tolist() if dbh_center_at_1_3m is not None else None,
-                'dbh_z_at_1_3m': dbh_z_at_1_3m
+                'dbh_z_at_1_3m': dbh_z_at_1_3m,
+                'dbh_target_z': dbh_target_z
             }
         else:
             self.log_to_console(f"⚠️ No valid circles found for section {section_id}")
-            return {'circles': [], 'avg_radius': 0.0, 'height_range': 0.0, 'dbh_at_1_3m': None}
+            return {'circles': [], 'avg_radius': 0.0, 'height_range': 0.0, 'dbh_at_1_3m': None, 'dbh_target_z': None}
 
     def _calculate_section_volume(self, section_data):
         """Calculate the volume of a section based on fitted circles using cylinder approximation."""
@@ -5397,7 +6590,16 @@ Important:
             'avg_center': [new_avg_x, new_avg_y],
             'height_range': new_height_range,
             'min_z': new_min_z,
-            'max_z': new_max_z
+            'max_z': new_max_z,
+            'extrapolated': True,
+            'original_height_range': section_data.get('height_range', 0.0),
+            'original_min_z': section_data.get('min_z', float('inf')),
+            'original_max_z': section_data.get('max_z', float('inf')),
+            'extrapolated_height_range': new_height_range,
+            'extrapolated_min_z': new_min_z,
+            'extrapolated_max_z': new_max_z,
+            'num_extrapolated_circles': len(extrapolated_circles),
+            'ground_level_used': ground_level
         }
 
         # Add average circles for extrapolated section
@@ -5606,17 +6808,18 @@ Important:
                 'point_color': 'cyan',
                 'circle_color': 'cyan',
                 'volume': self._calculate_section_volume(extrapolated_section_data),
-                'circle_data': extrapolated_section_data
+            'circle_data': extrapolated_section_data,
+            'extrapolated': True,
+            'original_height_range': 0.0,
+            'original_min_z': global_min_z,
+            'original_max_z': global_min_z,
+            'extrapolated_height_range': global_height_range,
+            'extrapolated_min_z': global_min_z_new,
+            'extrapolated_max_z': global_max_z_new,
+            'num_extrapolated_circles': len(extrapolated_circles),
+            'ground_level_used': ground_level
             }
-            
             self.accumulated_volume_sections.append(global_section_info)
-            
-            self.log_to_console(f"✅ Added global extrapolated section with {len(extrapolated_circles)} circles")
-            self.log_to_console(f"📊 Global extrapolation completed - height range: {global_height_range:.2f}m")
-            
-            # Log last extrapolated circle height and total cylinder height
-            self.log_to_console(f"📏 Last extrapolated circle at Z: {extrapolation_stop_level:.2f}m")
-            
             # Calculate total cylinder height across all sections
             all_z = []
             for section in self.accumulated_volume_sections:
@@ -5631,7 +6834,7 @@ Important:
                 total_height = total_max_z - total_min_z
                 self.log_to_console(f"📐 Total cylinder height: {total_height:.2f}m (from Z {total_min_z:.2f}m to {total_max_z:.2f}m)")
 
-    def _add_average_dbh_circles_for_section(self, circle_centers, avg_center, avg_radius, section_id, avg_color):
+    def _add_average_dbh_circles_for_section(self, circle_centers, avg_center, avg_radius, section_id, avg_color, run_id=None):
         """Add average circle at every height level for a specific section."""
         if len(circle_centers) == 0:
             return
@@ -5659,16 +6862,18 @@ Important:
                     merged_average = merged_average + circle
 
                 # Add the merged mesh to the plotter
+                actor_name = f'dbh_avg_circles_section_{section_id}' if run_id is None else f'dbh_avg_circles_run_{run_id}_section_{section_id}'
                 self.plotter.add_mesh(merged_average, color=avg_color, line_width=3, opacity=0.9,
-                                    name=f'dbh_avg_circles_section_{section_id}',
+                                    name=actor_name,
                                     label=f'Section {section_id} Avg Circles ({len(circle_centers)} circles)')
 
             # Add a single center marker for the average center trajectory
             centers_array = np.array([[center[0], center[1], center[2]] for center in circle_centers])
             avg_centers_cloud = pv.PolyData(centers_array)
+            traj_name = f'dbh_avg_trajectory_section_{section_id}' if run_id is None else f'dbh_avg_trajectory_run_{run_id}_section_{section_id}'
             self.plotter.add_mesh(avg_centers_cloud, color=avg_color, point_size=6,
                                 render_points_as_spheres=True, opacity=1.0,
-                                name=f'dbh_avg_trajectory_section_{section_id}', label=f'Section {section_id} Avg Trajectory ({len(circle_centers)} pts)')
+                                name=traj_name, label=f'Section {section_id} Avg Trajectory ({len(circle_centers)} pts)')
 
             self.log_to_console(f"🎯 Added section {section_id} average circles at {len(circle_centers)} height levels (R={avg_radius:.3f}m)")
 
@@ -5682,19 +6887,82 @@ Important:
         OVERLAYS results on existing tree visualization - does NOT clear the view.
         Accumulates results from multiple selections for comprehensive volume analysis.
         """
-        if self.selected_point_indices is None or len(self.selected_point_indices) == 0:
-            QMessageBox.warning(self, "No Selection", "No points selected. Please use the polygon selection tool first.")
-            return
-
         if not hasattr(self, 'current_tree_points') or self.current_tree_points is None:
             QMessageBox.warning(self, "No Tree Points", "No tree points available. Please visualize a tree first.")
             return
 
+        if self.selected_point_indices is None or len(self.selected_point_indices) == 0:
+            n_points = len(self.current_tree_points)
+            has_branch_detection = (
+                hasattr(self, 'branch_assignment') and
+                self.branch_assignment is not None and
+                len(self.branch_assignment) == n_points
+            )
+            has_trunk_detection = (
+                hasattr(self, 'trunk_assignment') and
+                self.trunk_assignment is not None and
+                len(self.trunk_assignment) == n_points
+            )
+
+            if has_branch_detection or has_trunk_detection:
+                self.selected_point_indices = np.arange(n_points, dtype=int)
+                mode_msg = "branches/trunks" if has_branch_detection and has_trunk_detection else ("branches" if has_branch_detection else "trunks")
+                self.log_to_console(f"ℹ️ No manual selection found. Using all {n_points} current tree points because {mode_msg} are already detected.")
+            else:
+                QMessageBox.warning(self, "No Selection", "No points selected. Please use the polygon selection tool first.")
+                return
+
+        # Validate selected indices are within the range of current visualization points.
+        # If they appear to be original LAS indices (out-of-range), try remapping to visualization indices.
         try:
+            sel = np.asarray(self.selected_point_indices)
+            if sel.size > 0 and len(self.current_tree_points) > 0 and np.max(sel) >= len(self.current_tree_points):
+                # Attempt to build mapping from original LAS indices -> visualization indices
+                global_indices = None
+                try:
+                    if hasattr(self, 'all_masks') and self.all_masks is not None and len(self.all_masks) > 0:
+                        per_mask_indices = [np.where(mask)[0] for mask in self.all_masks]
+                        global_indices = np.concatenate(per_mask_indices)
+                    elif hasattr(self, 'current_mask') and self.current_mask is not None and len(self.current_mask) == len(self.las_data.points):
+                        global_indices = np.where(self.current_mask)[0]
+                except Exception:
+                    global_indices = None
+
+                if global_indices is not None:
+                    mapping = {int(orig): int(viz) for viz, orig in enumerate(global_indices)}
+                    remapped = [mapping[int(x)] for x in sel if int(x) in mapping]
+                    if len(remapped) == 0:
+                        QMessageBox.warning(self, "Selection Index Error", "Selected indices appear out of range and could not be remapped to the current view. Please re-select points.")
+                        return
+                    self.selected_point_indices = np.array(remapped, dtype=int)
+                    self.log_to_console("🔁 Remapped selection indices from original LAS indices to current visualization indices.")
+                else:
+                    QMessageBox.warning(self, "Selection Index Error", "Selected indices are out of range for the current view and no index mapping is available. Please re-select points.")
+                    return
+        except Exception as e:
+            # In case of any unexpected failure during remapping, abort gracefully
+            self.log_to_console(f"⚠️ Error validating selection indices: {e}")
+            QMessageBox.warning(self, "Selection Index Error", f"Error validating selection indices: {e}")
+            return
+
+        try:
+            # Only calculate volume if trunk/branch detection state has changed since last calculation
+            current_sig = (getattr(self, 'current_tree_id', None),
+                           getattr(self, '_trunk_detection_version', 0),
+                           getattr(self, '_branch_detection_version', 0))
+            if getattr(self, '_last_volume_calc_signature', None) == current_sig:
+                self.log_to_console("ℹ️ Volume calculation skipped: no change in trunk/branch detection since last calculation.")
+                return
+
             volume_groups, is_branch_mode = self._get_volume_groups_from_selection()
             if not volume_groups:
                 QMessageBox.warning(self, "No Valid Groups", "No valid point groups found for volume calculation.")
                 return
+
+            # Start a new overlay run so every section in this run gets unique actor names.
+            self._volume_calc_run_id = int(getattr(self, '_volume_calc_run_id', 0)) + 1
+            current_run_id = self._volume_calc_run_id
+            self.log_to_console(f"🔖 Starting volume overlay run {current_run_id}")
             
             # Determine tree_id for this section based on selected points
             if hasattr(self, 'current_tree_ids') and self.current_tree_ids is not None:
@@ -5710,9 +6978,18 @@ Important:
                 # Fallback to current_tree_id
                 section_tree_id = self.current_tree_id
             
-            # Find the maximum section_id for this tree to ensure proper numbering
-            existing_section_ids = [int(s['section_id']) for s in self.accumulated_volume_sections if s['tree_id'] == section_tree_id and str(s['section_id']).isdigit()]
-            section_id = max(existing_section_ids) + 1 if existing_section_ids else 1
+            # Remove existing accumulated sections for this tree so each successful run is fresh
+            try:
+                prev_count = len(self.accumulated_volume_sections)
+                self.accumulated_volume_sections = [s for s in self.accumulated_volume_sections if s.get('tree_id') != section_tree_id]
+                removed = prev_count - len(self.accumulated_volume_sections)
+                if removed > 0:
+                    self.log_to_console(f"🧹 Cleared {removed} previous section(s) for tree {section_tree_id} to start a fresh volume calculation")
+            except Exception:
+                pass
+
+            # Start section numbering fresh for this tree
+            section_id = 1
 
             total_selected_points = sum(len(group_points) for _, _, group_points in volume_groups)
             if is_branch_mode:
@@ -5747,6 +7024,10 @@ Important:
                     point_color = section_colors[(section_id - 1) % len(section_colors)]
                     circle_color = section_colors[(section_id - 1) % len(section_colors)]
                     branch_suffix = f" | B{group_branch_id}" if group_branch_id is not None else ""
+                    branch_trunk_id = None
+                    if is_branch_mode and group_branch_id is not None and hasattr(self, 'branch_meta'):
+                        branch_meta = self.branch_meta.get(int(group_branch_id), {})
+                        branch_trunk_id = branch_meta.get('trunk_id')
 
                     # Show selected points for this section
                     selected_cloud = pv.PolyData(group_points)
@@ -5766,7 +7047,8 @@ Important:
                         section_id,
                         circle_color,
                         avg_color,
-                        measurement_label=measurement_label
+                        measurement_label=measurement_label,
+                        run_id=current_run_id
                     )
 
                     # Calculate volume for this section
@@ -5776,6 +7058,7 @@ Important:
                     section_info = {
                         'tree_id': section_tree_id,
                         'section_id': section_id,
+                        'trunk_id': int(branch_trunk_id) if branch_trunk_id is not None else None,
                         'branch_id': int(group_branch_id) if group_branch_id is not None else None,
                         'points': group_points.copy(),
                         'point_color': point_color,
@@ -5783,7 +7066,49 @@ Important:
                         'volume': section_volume,
                         'circle_data': section_data
                     }
-                    self.accumulated_volume_sections.append(section_info)
+
+                    # Avoid appending duplicate sections when re-running calculation without changes.
+                    # Consider duplicate if tree_id, trunk_id, branch_id match and
+                    # point count, centroid and volume are effectively identical.
+                    is_dup = False
+                    try:
+                        new_n = len(section_info['points'])
+                        new_centroid = np.mean(section_info['points'], axis=0) if new_n > 0 else np.array([0.0, 0.0, 0.0])
+                        new_vol = float(section_info.get('volume', 0.0) or 0.0)
+
+                        for ex in self.accumulated_volume_sections:
+                            try:
+                                if ex.get('tree_id') != section_info.get('tree_id'):
+                                    continue
+                                if ex.get('trunk_id') != section_info.get('trunk_id'):
+                                    continue
+                                if ex.get('branch_id') != section_info.get('branch_id'):
+                                    continue
+
+                                ex_n = len(ex.get('points') or [])
+                                if ex_n != new_n:
+                                    continue
+
+                                ex_centroid = np.mean(ex.get('points'), axis=0) if ex_n > 0 else np.array([0.0, 0.0, 0.0])
+                                if np.linalg.norm(ex_centroid - new_centroid) > 1e-3:
+                                    continue
+
+                                ex_vol = float(ex.get('volume', 0.0) or 0.0)
+                                if abs(ex_vol - new_vol) > 1e-6:
+                                    continue
+
+                                # All checks passed — treat as duplicate
+                                is_dup = True
+                                break
+                            except Exception:
+                                continue
+                    except Exception:
+                        is_dup = False
+
+                    if is_dup:
+                        self.log_to_console(f"🔁 Skipped duplicate section {section_id} for tree {section_tree_id} (no changes detected)")
+                    else:
+                        self.accumulated_volume_sections.append(section_info)
 
                     last_section_id = section_id
                     last_section_points = len(group_points)
@@ -5802,8 +7127,6 @@ Important:
                     if is_branch_mode:
                         avg_radius = section_data.get('avg_radius') if section_data else None
                         diameter_cm = (avg_radius * 2 * 100) if avg_radius else None
-                        if diameter_cm is not None:
-                            section_metric_values_cm.append(diameter_cm)
                         branch_label = f"B{group_branch_id}" if group_branch_id is not None else "N/A"
                         metric_text = f"{diameter_cm:.1f} cm" if diameter_cm is not None else "N/A"
                         self.log_to_console(
@@ -5821,14 +7144,42 @@ Important:
 
                     section_id += 1
 
-                # Perform global ground proximity check only in non-branch mode
-                if not is_branch_mode:
-                    self._check_global_ground_proximity_and_extrapolate()
-                else:
-                    self.log_to_console("ℹ️ Branch mode: ground extrapolation disabled")
+                # Perform global ground proximity check in all modes.
+                # In branch mode this helps DBH estimation when a trunk misses the exact DBH plane.
+                self._check_global_ground_proximity_and_extrapolate()
 
                 # Debug: Log accumulated sections count after adding
                 self.log_to_console(f"✅ Total accumulated sections now: {len(self.accumulated_volume_sections)}")
+
+                # Build and emit trunk summary table for the current accumulated results
+                trunk_summary, trunk_summary_lines, trunk_total_volume = self._build_trunk_volume_summary_table()
+                trunk_dbh_summary, trunk_dbh_lines, trunk_dbh_details = self._build_trunk_dbh_summary_table() if is_branch_mode else ({}, [], {})
+
+                if is_branch_mode and trunk_dbh_details:
+                    self._add_trunk_dbh_overlays(trunk_dbh_details)
+
+                if trunk_summary:
+                    self.log_to_console(f"📦 Total trunks used for volume: {len(trunk_summary)}")
+                    self.log_to_console("📋 Trunk volume summary:")
+                    for line in trunk_summary_lines:
+                        self.log_to_console(line)
+                        print(line)
+                    self.log_to_console(f"📊 Combined trunk volume: {trunk_total_volume:.4f} m³")
+                    print(f"Combined trunk volume: {trunk_total_volume:.4f} m³")
+                else:
+                    self.log_to_console("📦 Total trunks used for volume: 0")
+                    self.log_to_console("📋 Trunk volume summary: none")
+                    print("Total trunks used for volume: 0")
+                    print("Trunk volume summary: none")
+
+                if is_branch_mode:
+                    if trunk_dbh_summary:
+                        self.log_to_console("📐 Trunk DBH summary (1.3m above base):")
+                        for line in trunk_dbh_lines:
+                            self.log_to_console(line)
+                            print(line)
+                    else:
+                        self.log_to_console("📐 Trunk DBH summary (1.3m above base): none")
 
                 # Update info text to show accumulated results
                 total_sections = len(self.accumulated_volume_sections)
@@ -5837,16 +7188,23 @@ Important:
 
                 # Show measurement text based on mode
                 if is_branch_mode:
-                    avg_radius = last_section_data.get('avg_radius') if last_section_data else None
-                    diameter_cm = (avg_radius * 2 * 100) if avg_radius else None
-                    dbh_text = f"\nLast Diameter (section avg): {diameter_cm:.1f} cm" if diameter_cm else "\nLast Diameter (section avg): N/A"
+                    if trunk_dbh_summary:
+                        dbh_lines = [f"T{tid}: {dbh:.1f} cm" for tid, dbh in sorted(trunk_dbh_summary.items())]
+                        dbh_text = "\nDBH by trunk: " + "; ".join(dbh_lines)
+                    else:
+                        dbh_text = "\nDBH by trunk: N/A"
                 else:
                     dbh_at_1_3m = last_section_data.get('dbh_at_1_3m') if last_section_data else None
                     dbh_text = f"\nLast DBH @1.3m: {dbh_at_1_3m*100:.1f} cm" if dbh_at_1_3m else "\nLast DBH @1.3m: N/A"
 
                 metric_summary_text = ""
-                if section_metric_values_cm:
-                    metric_name = "Diameter (all sections)" if is_branch_mode else "DBH @1.3m (all sections)"
+                if is_branch_mode and trunk_dbh_summary:
+                    metric_summary_text = (
+                        f"\nDBH @1.3m (all trunks): min {np.min(list(trunk_dbh_summary.values())):.1f}, "
+                        f"max {np.max(list(trunk_dbh_summary.values())):.1f}, avg {np.mean(list(trunk_dbh_summary.values())):.1f} cm"
+                    )
+                elif section_metric_values_cm:
+                    metric_name = "DBH @1.3m (all sections)" if not is_branch_mode else "Diameter (all sections)"
                     metric_summary_text = (
                         f"\n{metric_name}: min {np.min(section_metric_values_cm):.1f}, "
                         f"max {np.max(section_metric_values_cm):.1f}, avg {np.mean(section_metric_values_cm):.1f} cm"
@@ -5854,11 +7212,21 @@ Important:
 
                 mode_text = "Mode: Branch-wise" if is_branch_mode else "Mode: Standard"
 
+                trunk_summary_overlay = ""
+                if trunk_summary:
+                    compact_rows = []
+                    for tid in sorted(trunk_summary.keys()):
+                        data = trunk_summary[tid]
+                        compact_rows.append(f"T{tid}: {data['total_volume']:.4f} m³ / {data['num_branches']} branches")
+                    trunk_summary_overlay = "\nTrunks Used: " + str(len(trunk_summary)) + "\n" + "\n".join(compact_rows)
+
                 info_text = (f"Accumulated Volume Calculation\n"
                             f"{mode_text}\n"
                             f"Sections: {total_sections}\n"
                             f"Total Points: {total_points}\n"
-                            f"Total Volume: {total_volume:.4f} m³"
+                            f"Combined Trunk Volume: {total_volume:.4f} m³\n"
+                            f"Trunks Used: {len(trunk_summary) if trunk_summary else 0}"
+                            f"{trunk_summary_overlay}"
                             f"{metric_summary_text}"
                             f"{dbh_text}\n"
                             f"Last Section: {last_section_id} ({last_section_points} pts, {last_section_volume:.4f} m³)")
@@ -5876,9 +7244,21 @@ Important:
                 self.plotter.update()
                 # NOTE: Don't reset_camera() here - preserve user's current view of the tree
 
+                # Mark that volume has been calculated for this detection state
+                try:
+                    self._last_volume_calc_signature = (
+                        getattr(self, 'current_tree_id', None),
+                        getattr(self, '_trunk_detection_version', 0),
+                        getattr(self, '_branch_detection_version', 0)
+                    )
+                    self.log_to_console(f"✅ Recorded volume calculation state: tree={self._last_volume_calc_signature[0]}, trunk_v={self._last_volume_calc_signature[1]}, branch_v={self._last_volume_calc_signature[2]}")
+                except Exception:
+                    pass
+
             # Enable clear button now that we have results
             self.clear_volume_button.setEnabled(True)
             self.save_volume_button.setEnabled(True)
+            self.export_trunks_button.setEnabled(True)
 
         except Exception as e:
             QMessageBox.warning(self, "Volume Calculation Error", f"Error performing volume calculation: {str(e)}")
@@ -5893,6 +7273,8 @@ Important:
         default_group = [(None, selected_indices, selected_points)]
 
         if not hasattr(self, 'branch_assignment') or self.branch_assignment is None:
+            # Ensure no trunk grouping leftover
+            self.volume_groups_by_trunk = {}
             return default_group, False
 
         if len(self.branch_assignment) != len(self.current_tree_points):
@@ -5917,9 +7299,232 @@ Important:
 
         if not grouped:
             self.log_to_console("⚠️ Branch groups were too small for fitting. Falling back to standard volume mode.")
+            self.volume_groups_by_trunk = {}
             return default_group, False
 
+        # Build trunk-scoped grouping for downstream per-trunk aggregation
+        try:
+            self.volume_groups_by_trunk = {}
+            for branch_id, branch_indices, branch_points in grouped:
+                trunk_id = None
+                # Prefer explicit branch_meta mapping if available
+                if hasattr(self, 'branch_meta') and branch_id in self.branch_meta:
+                    trunk_id = int(self.branch_meta[branch_id].get('trunk_id', -1))
+                else:
+                    # Fallback: infer trunk by majority vote of trunk_assignment within branch indices
+                    if hasattr(self, 'trunk_assignment') and self.trunk_assignment is not None:
+                        trunks_in_branch = self.trunk_assignment[branch_indices]
+                        valid = trunks_in_branch[trunks_in_branch >= 0]
+                        if len(valid) > 0:
+                            vals, counts = np.unique(valid, return_counts=True)
+                            trunk_id = int(vals[np.argmax(counts)])
+                if trunk_id is None or trunk_id < 0:
+                    trunk_id = -1
+
+                self.volume_groups_by_trunk.setdefault(int(trunk_id), []).append((branch_id, branch_indices, branch_points))
+        except Exception:
+            self.volume_groups_by_trunk = {}
+
         return grouped, True
+
+    def _build_trunk_volume_summary_table(self):
+        """Build trunk volume totals and formatted console rows from accumulated section data."""
+        trunk_summary = {}
+
+        # Prefer explicit trunk ids saved in sections; fall back to section grouping if needed.
+        for section in self.accumulated_volume_sections:
+            trunk_id = section.get('trunk_id', None)
+            branch_id = section.get('branch_id', None)
+            volume = float(section.get('volume', 0.0) or 0.0)
+            num_points = len(section.get('points', []))
+
+            if trunk_id is None:
+                # If no trunk id is present, skip from the trunk table rather than inventing one.
+                continue
+
+            trunk_key = int(trunk_id)
+            rec = trunk_summary.setdefault(trunk_key, {
+                'total_volume': 0.0,
+                'num_branches': 0,
+                'total_points': 0,
+                'branch_ids': set()
+            })
+            rec['total_volume'] += volume
+            rec['total_points'] += num_points
+            if branch_id is not None and branch_id not in rec['branch_ids']:
+                rec['branch_ids'].add(int(branch_id))
+                rec['num_branches'] = len(rec['branch_ids'])
+
+        # Convert to display-friendly structure and format rows
+        total_volume = sum(rec['total_volume'] for rec in trunk_summary.values())
+        rows = []
+        header = f"{'Trunk':<8} {'Volume_m3':>12} {'#Branches':>10} {'#Points':>10}"
+        rows.append(header)
+        rows.append("-" * len(header))
+
+        for trunk_id in sorted(trunk_summary.keys()):
+            rec = trunk_summary[trunk_id]
+            row = f"{trunk_id:<8} {rec['total_volume']:12.4f} {rec['num_branches']:10d} {rec['total_points']:10d}"
+            rows.append(row)
+
+        return trunk_summary, rows, total_volume
+
+    def _build_trunk_dbh_summary_table(self):
+        """Build trunk-level DBH totals using section-fitted circles (same pipeline as volume sections)."""
+        trunk_dbh: Dict[int, Dict[str, Any]] = {}
+        target_height = 1.3
+
+        if hasattr(self, 'current_tree_points') and self.current_tree_points is not None:
+            tree_base_z = float(np.min(self.current_tree_points[:, 2]))
+            dbh_target_z = tree_base_z + target_height
+        else:
+            dbh_target_z = target_height
+
+        # Default method: use section-derived circles for each trunk.
+        # Priority per trunk: exact section DBH circle at target height, else closest section average circle.
+        for section in self.accumulated_volume_sections:
+            trunk_id = section.get('trunk_id', None)
+            if trunk_id is None:
+                continue
+
+            circle_data = section.get('circle_data') or {}
+            dbh_at_1_3m = circle_data.get('dbh_at_1_3m')
+            dbh_center = circle_data.get('dbh_center_at_1_3m')
+            dbh_target_z_section = circle_data.get('dbh_target_z')
+            section_min_z = circle_data.get('min_z')
+            section_max_z = circle_data.get('max_z')
+            avg_radius = circle_data.get('avg_radius')
+            avg_center = circle_data.get('avg_center')
+
+            candidate = None
+
+            # Candidate 1: section average fitted circle (main method; this matches the red section circle).
+            if avg_radius is not None and avg_center is not None and section_min_z is not None and section_max_z is not None:
+                avg_radius = float(avg_radius)
+                if avg_radius > 0:
+                    section_min_z = float(section_min_z)
+                    section_max_z = float(section_max_z)
+                    if section_min_z <= dbh_target_z <= section_max_z:
+                        score = 0.0
+                    else:
+                        score = min(abs(dbh_target_z - section_min_z), abs(dbh_target_z - section_max_z))
+
+                    z_for_display = min(max(dbh_target_z, section_min_z), section_max_z)
+                    candidate = {
+                        'dbh_cm': float(avg_radius * 2.0 * 100.0),
+                        'radius_m': avg_radius,
+                        'center_xyz': [float(avg_center[0]), float(avg_center[1]), float(z_for_display)],
+                        'score': float(score),
+                        'priority': 0,
+                        'section_id': f"section_avg@{section.get('section_id')}",
+                        'dbh_target_z': float(dbh_target_z),
+                    }
+
+            # Candidate 2: exact DBH circle from this section, only if we need a fallback.
+            if candidate is None and dbh_at_1_3m is not None and dbh_center is not None:
+                candidate = {
+                    'dbh_cm': float(dbh_at_1_3m) * 100.0,
+                    'radius_m': float(dbh_at_1_3m) / 2.0,
+                    'center_xyz': [float(dbh_center[0]), float(dbh_center[1]), float(dbh_center[2])],
+                    'score': 0.0,
+                    'priority': 1,
+                    'section_id': f"section_dbh@{section.get('section_id')}",
+                    'dbh_target_z': float(dbh_target_z_section) if dbh_target_z_section is not None else float(dbh_target_z),
+                }
+
+            if candidate is not None:
+                rec = trunk_dbh.get(int(trunk_id))
+                if rec is None or (candidate['priority'], candidate['score']) < (rec['priority'], rec['score']):
+                    trunk_dbh[int(trunk_id)] = candidate
+
+        # No trunk-point refit fallback here by design:
+        # DBH should come from section-fitted circles used by the same branch/volume pipeline.
+
+        trunk_dbh_values = {tid: rec['dbh_cm'] for tid, rec in trunk_dbh.items()}
+        rows = []
+        header = f"{'Trunk':<8} {'DBH_cm':>12} {'Source':>24}"
+        rows.append(header)
+        rows.append("-" * len(header))
+
+        for trunk_id in sorted(trunk_dbh.keys()):
+            rec = trunk_dbh[trunk_id]
+            rows.append(f"{trunk_id:<8} {rec['dbh_cm']:12.1f} {str(rec['section_id']):>24}")
+
+        return trunk_dbh_values, rows, trunk_dbh
+
+    def _fit_single_circle_at_height(self, points, target_z, target_height=1.3, thickness=0.05, search_step=0.05, max_search=0.30):
+        """Fallback only: fit one circle at the requested height using the section DBH logic."""
+        if points is None or len(points) < 3:
+            return None
+
+        z_values = points[:, 2]
+        offsets = [0.0]
+        current = search_step
+        while current <= max_search + 1e-9:
+            offsets.extend([current, -current])
+            current += search_step
+
+        for offset in offsets:
+            slice_z = target_z + offset
+            height_mask = (z_values >= slice_z - thickness / 2.0) & (z_values <= slice_z + thickness / 2.0)
+            height_points = points[height_mask]
+
+            if len(height_points) < 3:
+                continue
+
+            cluster_xy = height_points[:, :2]
+            centroid = np.mean(cluster_xy, axis=0)
+            distances = np.linalg.norm(cluster_xy - centroid, axis=1)
+            radius = float(np.max(distances))
+
+            if 0.03 <= radius <= 0.5:
+                return {
+                    'center_xy': centroid,
+                    'radius_m': radius,
+                    'score': abs(offset),
+                    'z_used': slice_z,
+                    'n_points': len(height_points),
+                }
+
+        return None
+
+    def _add_trunk_dbh_overlays(self, trunk_dbh_details: Dict[int, Dict[str, Any]]):
+        """Render trunk-level DBH circles and labels in blue for all trunks with DBH estimates."""
+        if self.plotter is None:
+            return
+
+        for trunk_id, rec in trunk_dbh_details.items():
+            center = rec.get('center_xyz')
+            radius_m = rec.get('radius_m')
+            dbh_cm = rec.get('dbh_cm')
+
+            if center is None or radius_m is None or dbh_cm is None:
+                continue
+
+            try:
+                circle = pv.Circle(radius=float(radius_m), resolution=64)
+                circle.translate([float(center[0]), float(center[1]), float(center[2])], inplace=True)
+                self.plotter.add_mesh(
+                    circle,
+                    color='blue',
+                    opacity=0.9,
+                    line_width=4,
+                    style='wireframe',
+                    name=f'trunk_dbh_circle_{trunk_id}',
+                    label=f'Trunk {trunk_id} DBH: {float(dbh_cm):.1f}cm'
+                )
+
+                label_pos = [float(center[0] + float(radius_m) * 1.25), float(center[1]), float(center[2])]
+                self.plotter.add_point_labels(
+                    [label_pos],
+                    [f'T{trunk_id}: {float(dbh_cm):.1f}cm'],
+                    font_size=12,
+                    text_color='blue',
+                    point_size=0,
+                    name=f'trunk_dbh_label_{trunk_id}'
+                )
+            except Exception as e:
+                self.log_to_console(f"⚠️ Failed to draw blue trunk DBH overlay for trunk {trunk_id}: {e}")
 
     def clear_accumulated_volume(self):
         """
@@ -5929,6 +7534,9 @@ Important:
             # Clear accumulated data
             self.accumulated_volume_sections = []
             self.trees_with_volume_data.clear()
+            
+            # Reset volume calculation signature so a new tree can be calculated
+            self._last_volume_calc_signature = None
             
             # Refresh tree list colors
             self._refresh_tree_list_colors()
@@ -5967,6 +7575,7 @@ Important:
             
             # Disable clear button
             self.clear_volume_button.setEnabled(False)
+            self.export_trunks_button.setEnabled(False)
             
             self.log_to_console("🧹 Cleared all accumulated volume calculation results")
             
@@ -6008,7 +7617,14 @@ Important:
                     'point_color': section['point_color'],
                     'circle_color': section['circle_color'],
                     'num_points': len(section['points']),
-                    'circle_data': section['circle_data']
+                    'circle_data': section['circle_data'],
+                    'extrapolated': section.get('extrapolated', False),
+                    'original_height_range': section.get('original_height_range'),
+                    'extrapolated_height_range': section.get('extrapolated_height_range'),
+                    'original_min_z': section.get('original_min_z'),
+                    'extrapolated_min_z': section.get('extrapolated_min_z'),
+                    'num_extrapolated_circles': section.get('num_extrapolated_circles'),
+                    'ground_level_used': section.get('ground_level_used')
                 }
                 trees_data[tree_id]['sections'].append(section_data)
 
@@ -6029,19 +7645,40 @@ Important:
                 }
             }
 
-            # Get save folder - use volume folder if set, otherwise ask user
+            # Resolve a save folder automatically so the save button does not prompt for a folder.
             if self.volume_folder_path:
                 folder = self.volume_folder_path
                 self.log_to_console(f"💾 Using configured volume folder: {folder}")
             else:
-                folder = QFileDialog.getExistingDirectory(
-                    self, "Select Folder to Save Tree Data",
-                    ""  # Default directory
-                )
+                base_dir = None
+                las_basename = None
+                try:
+                    if getattr(self, 'current_las_path', None):
+                        base_dir = os.path.dirname(self.current_las_path)
+                        las_basename = os.path.splitext(os.path.basename(self.current_las_path))[0]
+                except Exception:
+                    base_dir = None
+                    las_basename = None
+
+                if not base_dir:
+                    base_dir = os.getcwd()
+                    las_basename = "volume_data"
+
+                folder = os.path.join(base_dir, 'volume', las_basename)
+                self.log_to_console(f"💾 Auto-selected volume folder: {folder}")
+
+            try:
+                os.makedirs(folder, exist_ok=True)
+            except Exception as e:
+                self.log_to_console(f"❌ Could not create volume folder {folder}: {e}")
+                return
+
+            self.volume_folder_path = folder
+            if hasattr(self, 'volume_folder_label'):
+                self.volume_folder_label.setText(f"Volume Folder: {os.path.basename(folder)}")
 
             if folder:
                 import json
-                import os
                 
                 saved_files = []
                 for tree_id, tree_data in trees_data.items():
@@ -6093,18 +7730,41 @@ Important:
     def load_volume_data(self):
         """Load volume calculation data from tree JSON files in a folder."""
         try:
-            # Get folder containing tree files
-            folder = QFileDialog.getExistingDirectory(
-                self, "Select Folder Containing Tree Data Files",
-                ""  # Default directory
-            )
+            # Reuse the remembered folder when available; otherwise resolve it from the current LAS path.
+            folder = None
+            if hasattr(self, 'volume_folder_path') and isinstance(self.volume_folder_path, str) and self.volume_folder_path and os.path.exists(self.volume_folder_path):
+                folder = self.volume_folder_path
+                self.log_to_console(f"📂 Using configured volume folder: {folder}")
+            else:
+                base_dir = None
+                las_basename = None
+                try:
+                    if getattr(self, 'current_las_path', None):
+                        base_dir = os.path.dirname(self.current_las_path)
+                        las_basename = os.path.splitext(os.path.basename(self.current_las_path))[0]
+                except Exception:
+                    base_dir = None
+                    las_basename = None
 
-            if not folder:
+                if not base_dir:
+                    base_dir = os.getcwd()
+                    las_basename = "volume_data"
+
+                folder = os.path.join(base_dir, 'volume', las_basename)
+                self.log_to_console(f"📂 Auto-resolved volume folder: {folder}")
+
+            try:
+                os.makedirs(folder, exist_ok=True)
+            except Exception as e:
+                QMessageBox.warning(self, "Volume Folder Error", f"Could not create volume folder:\n{folder}\n\n{e}")
                 return
 
             import json
-            import os
             import glob
+
+            self.volume_folder_path = folder
+            if hasattr(self, 'volume_folder_label'):
+                self.volume_folder_label.setText(f"Volume Folder: {os.path.basename(folder)}")
 
             # Find all tree_*.json files in the folder
             tree_files = sorted(glob.glob(os.path.join(folder, "tree_*.json")))
@@ -6113,7 +7773,40 @@ Important:
                 QMessageBox.warning(self, "No Tree Files", f"No tree_*.json files found in {folder}")
                 return
 
-            self.log_to_console(f"📂 Found {len(tree_files)} tree files in selected folder. Loading all files...")
+            # Prefer loading only the tree(s) currently shown in the plotter.
+            visualized_tree_ids = set()
+            if hasattr(self, 'get_visualized_tree_ids'):
+                try:
+                    visualized_tree_ids = set(str(tid) for tid in self.get_visualized_tree_ids())
+                except Exception:
+                    visualized_tree_ids = set()
+
+            # Fallback to a single current_tree_id when available.
+            if not visualized_tree_ids and hasattr(self, 'current_tree_id') and self.current_tree_id is not None:
+                current_tree_id_str = str(self.current_tree_id)
+                try:
+                    visualized_tree_ids = {str(int(current_tree_id_str))}
+                except ValueError:
+                    visualized_tree_ids = set()
+
+            if visualized_tree_ids:
+                filtered_tree_files = []
+                for tree_file in tree_files:
+                    filename = os.path.basename(tree_file)
+                    tree_id = filename.replace('tree_', '').replace('.json', '')
+                    if tree_id in visualized_tree_ids:
+                        filtered_tree_files.append(tree_file)
+                if filtered_tree_files:
+                    self.log_to_console(
+                        f"📂 Found {len(tree_files)} tree files in folder, loading only visualized tree(s): {sorted(visualized_tree_ids)}"
+                    )
+                    tree_files = filtered_tree_files
+                else:
+                    self.log_to_console(
+                        f"⚠️ No matching volume file found for visualized tree(s) {sorted(visualized_tree_ids)}. Falling back to all files."
+                    )
+            else:
+                self.log_to_console(f"📂 Found {len(tree_files)} tree files in selected folder. Loading all files...")
 
             # Clear existing volume data if any
             if self.accumulated_volume_sections:
@@ -6190,6 +7883,7 @@ Important:
             # Update UI
             self.clear_volume_button.setEnabled(True)
             self.save_volume_button.setEnabled(True)
+            self.export_trunks_button.setEnabled(True)
 
             # Update info display
             total_sections = len(self.accumulated_volume_sections)
@@ -6308,6 +8002,14 @@ Important:
             return set()
         
         tree_id_str = str(self.current_tree_id)
+
+        # Handle any label that contains tree IDs inside parentheses.
+        if "(" in tree_id_str and ")" in tree_id_str:
+            ids_part = tree_id_str[tree_id_str.find("(") + 1:tree_id_str.rfind(")")]
+            if ids_part:
+                id_strings = [id_str.strip() for id_str in ids_part.split(",") if id_str.strip()]
+                if id_strings:
+                    return set(id_strings)
         
         # Handle single tree case (just a number)
         try:
@@ -6316,16 +8018,6 @@ Important:
             return {str(tree_id)}
         except ValueError:
             pass
-        
-        # Handle multiple trees case: "Multiple (1, 3, 4)" or "Multiple (1)"
-        if tree_id_str.startswith("Multiple (") and tree_id_str.endswith(")"):
-            # Extract the part between parentheses
-            ids_part = tree_id_str[10:-1]  # Remove "Multiple (" and ")"
-            if ids_part:
-                # Split by comma and strip whitespace
-                id_strings = [id_str.strip() for id_str in ids_part.split(",")]
-                # Convert to set of strings
-                return set(id_strings)
         
         # Fallback: return empty set
         return set()
@@ -6884,34 +8576,7 @@ Important:
         self.plotter.reset_camera()
 
 
-    def select_volume_folder(self):
-        """Open folder selection dialog for volume data folder."""
-        try:
-            # Open folder selection dialog
-            folder_path = QFileDialog.getExistingDirectory(
-                self,
-                "Select Volume Data Folder",
-                self.volume_folder_path if hasattr(self, 'volume_folder_path') and self.volume_folder_path else ""
-            )
 
-            if folder_path:  # User selected a folder
-                self.volume_folder_path = folder_path
-                self.volume_folder_label.setText(f"Volume Folder: {os.path.basename(folder_path)}")
-                self.log_to_console(f"📁 Selected volume folder: {folder_path}")
-
-                # Scan the folder for volume data files
-                self.scan_volume_folder_for_trees()
-
-                # Update tree list colors based on volume data availability
-                self.check_volume_folder_for_trees()
-                self._refresh_tree_list_colors()
-
-            else:  # User cancelled
-                self.log_to_console("📁 Volume folder selection cancelled")
-
-        except Exception as e:
-            QMessageBox.warning(self, "Folder Selection Error", f"Error selecting volume folder: {str(e)}")
-            self.log_to_console(f"❌ Error selecting volume folder: {str(e)}")
 
 
 def extract_components(points: np.ndarray, branching_height: float, assign_radius: float = 0.5,

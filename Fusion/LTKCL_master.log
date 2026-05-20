@@ -36034,3 +36034,236 @@ Clipped data file produced:
    D:/Enhanced Forest Inventory/Data/Plot_Polygon/Crossflight_Clip\clipped_to_polygon\clipped_Area#3_20251014_LLR_L2_NoOverlap.las    Mar 24, 2026 @ 1:22 PM
 Run finished: Tue Mar 24 13:22:59 2026 (elapsed time: 95 seconds)
 Done
+**********
+ClipData v2.80 64-bit (FUSION v4.61) (Built on Sep  5 2024 15:14:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: E:/AGRG/TreeAIBox/Fusion/clipdata64.exe  /height /dtm:E:/AGRG/DTM/dtm_L3_Derived_20260407/20260424_LLR_L3/DTM/20260424_LLR_L3.dtm "E:/AGRG/New DataStore/2026/LeafOFF/20260407_LLR_L2.las" "E:/AGRG/New DataStore/2026/LeafOFF/Normalized\normalized\20260407_LLR_L2_normalized.las" 335351.045 4982479.49 335787.695 4983113.127
+Run started: Sat May 16 23:46:48 2026
+649151987 points were within the DTM extents..0 were not
+Data subsample file produced:
+   E:/AGRG/New DataStore/2026/LeafOFF/Normalized\normalized\20260407_LLR_L2_normalized.las    May 16, 2026 @ 11:53 PM
+   649151987 points
+Run finished: Sat May 16 23:53:21 2026 (elapsed time: 393 seconds)
+Done
+**********
+ClipData v2.80 64-bit (FUSION v4.61) (Built on Sep  5 2024 15:14:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: E:/AGRG/TreeAIBox/Fusion/clipdata64.exe  /height /dtm:E:/AGRG/DTM/dtm_L3_Derived_20260407/20260424_LLR_L3/DTM/20260424_LLR_L3.dtm "E:/AGRG/New DataStore/2026/LeafOFF/20260416_LLR_L2.las" "E:/AGRG/New DataStore/2026/LeafOFF\normalized\20260416_LLR_L2_normalized.las" 335352.077 4982479.388 335771.653 4983113.405
+Run started: Sun May 17 00:02:07 2026
+321852751 points were within the DTM extents..0 were not
+Data subsample file produced:
+   E:/AGRG/New DataStore/2026/LeafOFF\normalized\20260416_LLR_L2_normalized.las    May 17, 2026 @ 0:05 AM
+   321852751 points
+Run finished: Sun May 17 00:05:17 2026 (elapsed time: 190 seconds)
+Done
+**********
+ClipData v2.80 64-bit (FUSION v4.61) (Built on Sep  5 2024 15:14:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: E:/AGRG/TreeAIBox/Fusion/clipdata64.exe  /height /dtm:E:/AGRG/DTM/dtm_L3_Derived_20260407/20260424_LLR_L3/DTM/20260424_LLR_L3.dtm "E:/AGRG/New DataStore/2026/LeafOFF/20260424_LLR_L3.las" "E:/AGRG/New DataStore/2026/LeafOFF\normalized\20260424_LLR_L3_normalized.las" 335343.439 4982529.838 335739.258 4983087.638
+Run started: Sun May 17 00:09:11 2026
+212745554 points were within the DTM extents..0 were not
+Data subsample file produced:
+   E:/AGRG/New DataStore/2026/LeafOFF\normalized\20260424_LLR_L3_normalized.las    May 17, 2026 @ 0:11 AM
+   212745554 points
+Run finished: Sun May 17 00:11:27 2026 (elapsed time: 136 seconds)
+Done
+**********
+ClipData v2.80 64-bit (FUSION v4.61) (Built on Sep  5 2024 15:14:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: E:/AGRG/TreeAIBox/Fusion/clipdata64.exe  /height /dtm:E:/AGRG/DTM/dtm_L3_Derived_20260407/20260424_LLR_L3/DTM/20260424_LLR_L3.dtm "E:/AGRG/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric.las" "E:/AGRG/New DataStore/2025/LeafOFF\normalized\20250407_LLR_L2_AllPoints_Orthometric_normalized.las" 335313.532 4982452.488 335755.894 4983129.981
+Run started: Sun May 17 00:49:57 2026
+150396546 points were within the DTM extents..0 were not
+Data subsample file produced:
+   E:/AGRG/New DataStore/2025/LeafOFF\normalized\20250407_LLR_L2_AllPoints_Orthometric_normalized.las    May 17, 2026 @ 0:51 AM
+   150396546 points
+Run finished: Sun May 17 00:51:37 2026 (elapsed time: 100 seconds)
+Done
+**********
+ClipData v2.80 64-bit (FUSION v4.61) (Built on Sep  5 2024 15:14:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: E:/AGRG/TreeAIBox/Fusion/clipdata64.exe  /height /dtm:E:/AGRG/DTM/dtm_L3_Derived_20260407/20260424_LLR_L3/DTM/20260424_LLR_L3.dtm "E:/AGRG/New DataStore/2025/LeafON/20250626_LLR_L2_AllClass_Orthometric.las" "E:/AGRG/New DataStore/2025/LeafON\normalized\20250626_LLR_L2_AllClass_Orthometric_normalized.las" 335349.852 4982473.111 335771.741 4983113.198
+Run started: Sun May 17 00:53:04 2026
+186029480 points were within the DTM extents..0 were not
+Data subsample file produced:
+   E:/AGRG/New DataStore/2025/LeafON\normalized\20250626_LLR_L2_AllClass_Orthometric_normalized.las    May 17, 2026 @ 0:54 AM
+   186029480 points
+Run finished: Sun May 17 00:54:59 2026 (elapsed time: 115 seconds)
+Done
+**********
+ClipData v2.80 64-bit (FUSION v4.61) (Built on Sep  5 2024 15:14:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: E:/AGRG/TreeAIBox/Fusion/clipdata64.exe  /height /dtm:E:/AGRG/DTM/dtm_L3_Derived_20260407/20260424_LLR_L3/DTM/20260424_LLR_L3.dtm "E:/AGRG/New DataStore/2025/Shreddy/20251022_LLR_Crossed_MatchPasses.las" "E:/AGRG/New DataStore/2025/Shreddy\normalized\20251022_LLR_Crossed_MatchPasses_normalized.las" 335329.328 4982473.074 335795.407 4983113.642
+Run started: Sun May 17 01:03:12 2026
+734494982 points were within the DTM extents..0 were not
+Data subsample file produced:
+   E:/AGRG/New DataStore/2025/Shreddy\normalized\20251022_LLR_Crossed_MatchPasses_normalized.las    May 17, 2026 @ 1:10 AM
+   734494982 points
+Run finished: Sun May 17 01:10:52 2026 (elapsed time: 460 seconds)
+Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: ..\..\Fusion\PolyClipData.exe  /multifile /shape:1,* ..\Data\LLY\Plot_Polygon\Plot_Buffer_11m.shp ..\Data\LLY\Output\stand.las ..\Data\LLY\Airborne\20241009144557_AGRG_LLR_Topo_CGVD2013.las
+Run started: Sun May 17 13:18:35 2026
+   Removing invalid point file from input list: ..\Data\LLY\Airborne\20241009144557_AGRG_LLR_Topo_CGVD2013.las
+No valid point files in input
+
+Run finished: Sun May 17 13:18:35 2026 (elapsed time: 0 seconds)
+***There were errors during the run
+Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: E:\AGRG\TreeAIBox\Fusion\PolyClipData.exe  /verbose /shape:2,1 E:/AGRG/ClipPolygon\PlotPolygons.shp E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_1_20260424_LLR_L3_normalized_treefilter.las "E:/AGRG/New DataStore/2026/LeafOFF/Normalized/20260424_LLR_L3_normalized_treefilter.las"
+Run started: Sun May 17 13:37:35 2026
+   E:/AGRG/New DataStore/2026/LeafOFF/Normalized/20260424_LLR_L3_normalized_treefilter.las: 212745554 points
+   Clipping E:/AGRG/New DataStore/2026/LeafOFF/Normalized/20260424_LLR_L3_normalized_treefilter.las...941856 points out of 212745554 written to output file
+Clipped data file produced:
+   E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_1_20260424_LLR_L3_normalized_treefilter.las    May 17, 2026 @ 1:38 PM
+Run finished: Sun May 17 13:38:49 2026 (elapsed time: 74 seconds)
+Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: E:\AGRG\TreeAIBox\Fusion\PolyClipData.exe  /verbose /shape:2,2 E:/AGRG/ClipPolygon\PlotPolygons.shp E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_2_20260424_LLR_L3_normalized_treefilter.las "E:/AGRG/New DataStore/2026/LeafOFF/Normalized/20260424_LLR_L3_normalized_treefilter.las"
+Run started: Sun May 17 13:38:49 2026
+   E:/AGRG/New DataStore/2026/LeafOFF/Normalized/20260424_LLR_L3_normalized_treefilter.las: 212745554 points
+   Clipping E:/AGRG/New DataStore/2026/LeafOFF/Normalized/20260424_LLR_L3_normalized_treefilter.las...1603945 points out of 212745554 written to output file
+Clipped data file produced:
+   E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_2_20260424_LLR_L3_normalized_treefilter.las    May 17, 2026 @ 1:40 PM
+Run finished: Sun May 17 13:40:03 2026 (elapsed time: 74 seconds)
+Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: E:\AGRG\TreeAIBox\Fusion\PolyClipData.exe  /verbose /shape:2,3 E:/AGRG/ClipPolygon\PlotPolygons.shp E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_3_20260424_LLR_L3_normalized_treefilter.las "E:/AGRG/New DataStore/2026/LeafOFF/Normalized/20260424_LLR_L3_normalized_treefilter.las"
+Run started: Sun May 17 13:40:03 2026
+   E:/AGRG/New DataStore/2026/LeafOFF/Normalized/20260424_LLR_L3_normalized_treefilter.las: 212745554 points
+   Clipping E:/AGRG/New DataStore/2026/LeafOFF/Normalized/20260424_LLR_L3_normalized_treefilter.las...1619584 points out of 212745554 written to output file
+Clipped data file produced:
+   E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_3_20260424_LLR_L3_normalized_treefilter.las    May 17, 2026 @ 1:41 PM
+Run finished: Sun May 17 13:41:18 2026 (elapsed time: 75 seconds)
+Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: E:\AGRG\TreeAIBox\Fusion\PolyClipData.exe  /verbose /shape:2,4 E:/AGRG/ClipPolygon\PlotPolygons.shp E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_4_20260424_LLR_L3_normalized_treefilter.las "E:/AGRG/New DataStore/2026/LeafOFF/Normalized/20260424_LLR_L3_normalized_treefilter.las"
+Run started: Sun May 17 13:41:18 2026
+   E:/AGRG/New DataStore/2026/LeafOFF/Normalized/20260424_LLR_L3_normalized_treefilter.las: 212745554 points
+   Clipping E:/AGRG/New DataStore/2026/LeafOFF/Normalized/20260424_LLR_L3_normalized_treefilter.las...1391109 points out of 212745554 written to output file
+Clipped data file produced:
+   E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_4_20260424_LLR_L3_normalized_treefilter.las    May 17, 2026 @ 1:42 PM
+Run finished: Sun May 17 13:42:32 2026 (elapsed time: 74 seconds)
+Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: E:\AGRG\TreeAIBox\Fusion\PolyClipData.exe  /verbose /shape:2,5 E:/AGRG/ClipPolygon\PlotPolygons.shp E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_5_20260424_LLR_L3_normalized_treefilter.las "E:/AGRG/New DataStore/2026/LeafOFF/Normalized/20260424_LLR_L3_normalized_treefilter.las"
+Run started: Sun May 17 13:42:32 2026
+   E:/AGRG/New DataStore/2026/LeafOFF/Normalized/20260424_LLR_L3_normalized_treefilter.las: 212745554 points
+   Clipping E:/AGRG/New DataStore/2026/LeafOFF/Normalized/20260424_LLR_L3_normalized_treefilter.las...1565535 points out of 212745554 written to output file
+Clipped data file produced:
+   E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_5_20260424_LLR_L3_normalized_treefilter.las    May 17, 2026 @ 1:43 PM
+Run finished: Sun May 17 13:43:45 2026 (elapsed time: 73 seconds)
+Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: E:\AGRG\TreeAIBox\Fusion\PolyClipData.exe  /verbose /shape:2,6 E:/AGRG/ClipPolygon\PlotPolygons.shp E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_6_20260424_LLR_L3_normalized_treefilter.las "E:/AGRG/New DataStore/2026/LeafOFF/Normalized/20260424_LLR_L3_normalized_treefilter.las"
+Run started: Sun May 17 13:43:45 2026
+   E:/AGRG/New DataStore/2026/LeafOFF/Normalized/20260424_LLR_L3_normalized_treefilter.las: 212745554 points
+   Clipping E:/AGRG/New DataStore/2026/LeafOFF/Normalized/20260424_LLR_L3_normalized_treefilter.las...1390915 points out of 212745554 written to output file
+Clipped data file produced:
+   E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_6_20260424_LLR_L3_normalized_treefilter.las    May 17, 2026 @ 1:44 PM
+Run finished: Sun May 17 13:44:59 2026 (elapsed time: 74 seconds)
+Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: E:\AGRG\TreeAIBox\Fusion\PolyClipData.exe  /verbose /shape:2,7 E:/AGRG/ClipPolygon\PlotPolygons.shp E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_7_20260424_LLR_L3_normalized_treefilter.las "E:/AGRG/New DataStore/2026/LeafOFF/Normalized/20260424_LLR_L3_normalized_treefilter.las"
+Run started: Sun May 17 13:44:59 2026
+   E:/AGRG/New DataStore/2026/LeafOFF/Normalized/20260424_LLR_L3_normalized_treefilter.las: 212745554 points
+   Clipping E:/AGRG/New DataStore/2026/LeafOFF/Normalized/20260424_LLR_L3_normalized_treefilter.las...980656 points out of 212745554 written to output file
+Clipped data file produced:
+   E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_7_20260424_LLR_L3_normalized_treefilter.las    May 17, 2026 @ 1:46 PM
+Run finished: Sun May 17 13:46:09 2026 (elapsed time: 70 seconds)
+Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: E:\AGRG\TreeAIBox\Fusion\PolyClipData.exe  /verbose /shape:2,8 E:/AGRG/ClipPolygon\PlotPolygons.shp E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_8_20260424_LLR_L3_normalized_treefilter.las "E:/AGRG/New DataStore/2026/LeafOFF/Normalized/20260424_LLR_L3_normalized_treefilter.las"
+Run started: Sun May 17 13:46:09 2026
+   E:/AGRG/New DataStore/2026/LeafOFF/Normalized/20260424_LLR_L3_normalized_treefilter.las: 212745554 points
+   Clipping E:/AGRG/New DataStore/2026/LeafOFF/Normalized/20260424_LLR_L3_normalized_treefilter.las...1001146 points out of 212745554 written to output file
+Clipped data file produced:
+   E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_8_20260424_LLR_L3_normalized_treefilter.las    May 17, 2026 @ 1:47 PM
+Run finished: Sun May 17 13:47:23 2026 (elapsed time: 74 seconds)
+Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: E:\AGRG\TreeAIBox\Fusion\PolyClipData.exe  /verbose /shape:1,0.00000000000 E:/AGRG/ClipPolygon\PlotPolygons.shp E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_0.0_20260407_LLR_L2.las "E:/AGRG/New DataStore/2026/LeafOFF/20260407_LLR_L2.las"
+Run started: Tue May 19 14:21:14 2026
+   E:/AGRG/New DataStore/2026/LeafOFF/20260407_LLR_L2.las: 703821105 points
+   Clipping E:/AGRG/New DataStore/2026/LeafOFF/20260407_LLR_L2.las...2970085 points out of 703821105 written to output file
+Clipped data file produced:
+   E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_0.0_20260407_LLR_L2.las    May 19, 2026 @ 2:25 PM
+Run finished: Tue May 19 14:25:43 2026 (elapsed time: 269 seconds)
+Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: E:\AGRG\TreeAIBox\Fusion\PolyClipData.exe  /verbose /shape:1,1.00000000000 E:/AGRG/ClipPolygon\PlotPolygons.shp E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_1.0_20260407_LLR_L2.las "E:/AGRG/New DataStore/2026/LeafOFF/20260407_LLR_L2.las"
+Run started: Tue May 19 14:25:43 2026
+   E:/AGRG/New DataStore/2026/LeafOFF/20260407_LLR_L2.las: 703821105 points
+   Clipping E:/AGRG/New DataStore/2026/LeafOFF/20260407_LLR_L2.las...**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: E:\AGRG\TreeAIBox\Fusion\PolyClipData.exe  /verbose /shape:2,1 E:/AGRG/ClipPolygon\PlotPolygons.shp E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_1_20260407_LLR_L2.las "E:/AGRG/New DataStore/2026/LeafOFF/20260407_LLR_L2.las"
+Run started: Tue May 19 14:27:11 2026
+   E:/AGRG/New DataStore/2026/LeafOFF/20260407_LLR_L2.las: 703821105 points
+   Clipping E:/AGRG/New DataStore/2026/LeafOFF/20260407_LLR_L2.las...2970085 points out of 703821105 written to output file
+Clipped data file produced:
+   E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_1_20260407_LLR_L2.las    May 19, 2026 @ 2:31 PM
+Run finished: Tue May 19 14:31:41 2026 (elapsed time: 270 seconds)
+Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: E:\AGRG\TreeAIBox\Fusion\PolyClipData.exe  /verbose /shape:2,2 E:/AGRG/ClipPolygon\PlotPolygons.shp E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_2_20260407_LLR_L2.las "E:/AGRG/New DataStore/2026/LeafOFF/20260407_LLR_L2.las"
+Run started: Tue May 19 14:31:41 2026
+   E:/AGRG/New DataStore/2026/LeafOFF/20260407_LLR_L2.las: 703821105 points
+   Clipping E:/AGRG/New DataStore/2026/LeafOFF/20260407_LLR_L2.las...4423715 points out of 703821105 written to output file
+Clipped data file produced:
+   E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_2_20260407_LLR_L2.las    May 19, 2026 @ 2:36 PM
+Run finished: Tue May 19 14:36:06 2026 (elapsed time: 265 seconds)
+Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: E:\AGRG\TreeAIBox\Fusion\PolyClipData.exe  /verbose /shape:2,3 E:/AGRG/ClipPolygon\PlotPolygons.shp E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_3_20260407_LLR_L2.las "E:/AGRG/New DataStore/2026/LeafOFF/20260407_LLR_L2.las"
+Run started: Tue May 19 14:36:07 2026
+   E:/AGRG/New DataStore/2026/LeafOFF/20260407_LLR_L2.las: 703821105 points
+   Clipping E:/AGRG/New DataStore/2026/LeafOFF/20260407_LLR_L2.las...3769810 points out of 703821105 written to output file
+Clipped data file produced:
+   E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_3_20260407_LLR_L2.las    May 19, 2026 @ 2:40 PM
+Run finished: Tue May 19 14:40:43 2026 (elapsed time: 276 seconds)
+Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: E:\AGRG\TreeAIBox\Fusion\PolyClipData.exe  /verbose /shape:2,4 E:/AGRG/ClipPolygon\PlotPolygons.shp E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_4_20260407_LLR_L2.las "E:/AGRG/New DataStore/2026/LeafOFF/20260407_LLR_L2.las"
+Run started: Tue May 19 14:40:43 2026
+   E:/AGRG/New DataStore/2026/LeafOFF/20260407_LLR_L2.las: 703821105 points
+   Clipping E:/AGRG/New DataStore/2026/LeafOFF/20260407_LLR_L2.las...3021818 points out of 703821105 written to output file
+Clipped data file produced:
+   E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_4_20260407_LLR_L2.las    May 19, 2026 @ 2:44 PM
+Run finished: Tue May 19 14:44:40 2026 (elapsed time: 237 seconds)
+Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: E:\AGRG\TreeAIBox\Fusion\PolyClipData.exe  /verbose /shape:2,5 E:/AGRG/ClipPolygon\PlotPolygons.shp E:/AGRG/ClipPolygon\clipped_to_polygon\clipped_5_20260407_LLR_L2.las "E:/AGRG/New DataStore/2026/LeafOFF/20260407_LLR_L2.las"
+Run started: Tue May 19 14:44:40 2026
+   E:/AGRG/New DataStore/2026/LeafOFF/20260407_LLR_L2.las: 703821105 points
+   Clipping E:/AGRG/New DataStore/2026/LeafOFF/20260407_LLR_L2.las...

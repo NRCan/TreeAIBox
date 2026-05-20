@@ -111,7 +111,14 @@ class VolumeSummaryReport:
                 'avg_diameter': avg_diameter,
                 'diameters': section_diameters,
                 'heights': section_heights,
-                'num_circles': len(circles)
+                'num_circles': len(circles),
+                'extrapolated': section.get('extrapolated', False),
+                'original_height_range': section.get('original_height_range'),
+                'extrapolated_height_range': section.get('extrapolated_height_range'),
+                'original_min_z': section.get('original_min_z'),
+                'extrapolated_min_z': section.get('extrapolated_min_z'),
+                'num_extrapolated_circles': section.get('num_extrapolated_circles'),
+                'ground_level_used': section.get('ground_level_used')
             })
 
             diameters.extend(section_diameters)
@@ -204,11 +211,20 @@ class VolumeSummaryReport:
                 report_lines.append(f"      Volume: {section['volume']:.4f} m³")
                 report_lines.append(f"      Avg Diameter: {section['avg_diameter']:.3f} m")
                 report_lines.append(f"      Circles: {section['num_circles']}")
-                if section['diameters']:
-                    diameters_str = ", ".join([f"{d:.3f}" for d in section['diameters'][:5]])  # Show first 5
-                    if len(section['diameters']) > 5:
-                        diameters_str += f" ... (+{len(section['diameters'])-5} more)"
-                    report_lines.append(f"      Diameters: [{diameters_str}] m")
+                if section.get('extrapolated'):
+                    report_lines.append(f"      ⚠️ EXTRAPOLATED to ground level")
+                    if section.get('original_height_range') is not None:
+                        report_lines.append(f"      Original height range: {section['original_height_range']:.2f}m")
+                    if section.get('extrapolated_height_range') is not None:
+                        report_lines.append(f"      Extrapolated height range: {section['extrapolated_height_range']:.2f}m")
+                    if section.get('original_min_z') is not None:
+                        report_lines.append(f"      Original lowest Z: {section['original_min_z']:.2f}m")
+                    if section.get('extrapolated_min_z') is not None:
+                        report_lines.append(f"      Extrapolated lowest Z: {section['extrapolated_min_z']:.2f}m")
+                    if section.get('num_extrapolated_circles') is not None:
+                        report_lines.append(f"      Extrapolated circles added: {section['num_extrapolated_circles']}")
+                    if section.get('ground_level_used') is not None:
+                        report_lines.append(f"      Ground level used: {section['ground_level_used']:.2f}m")
                 report_lines.append("")
 
             report_lines.append("")
@@ -242,7 +258,7 @@ class VolumeSummaryReport:
         # Generate CSV data
         csv_lines = []
         if include_sections:
-            csv_lines.append("Report_Type,Tree_ID,Section_ID,Volume_m3,DBH_Diameter_m,Avg_Diameter_m,Min_Diameter_m,Max_Diameter_m,Height_Range_m,Num_Circles,Individual_Diameters_m")
+            csv_lines.append("Report_Type,Tree_ID,Section_ID,Volume_m3,DBH_Diameter_m,Avg_Diameter_m,Min_Diameter_m,Max_Diameter_m,Height_Range_m,Num_Circles,Individual_Diameters_m,Extrapolated,Original_Height_Range_m,Extrapolated_Height_Range_m,Original_Min_Z_m,Extrapolated_Min_Z_m,Num_Extrapolated_Circles,Ground_Level_Used_m")
         else:
             csv_lines.append("Report_Type,Tree_ID,Volume_m3,DBH_Diameter_m,Avg_Diameter_m,Min_Diameter_m,Max_Diameter_m,Height_Range_m,Total_Sections")
 
@@ -265,7 +281,7 @@ class VolumeSummaryReport:
                     diameters_str = "|".join([f"{d:.4f}" for d in section['diameters']])
                     min_diam = min(section['diameters']) if section['diameters'] else 0.0
                     max_diam = max(section['diameters']) if section['diameters'] else 0.0
-                    csv_lines.append(f"SECTION_DETAIL,{tree_data['tree_id']},{section['section_id']},{section['volume']:.4f},,{section['avg_diameter']:.4f},{min_diam:.4f},{max_diam:.4f},,{section['num_circles']},{diameters_str}")
+                    csv_lines.append(f"SECTION_DETAIL,{tree_data['tree_id']},{section['section_id']},{section['volume']:.4f},,{section['avg_diameter']:.4f},{min_diam:.4f},{max_diam:.4f},,{section['num_circles']},{diameters_str},{section.get('extrapolated', False)},{section.get('original_height_range', '') if section.get('original_height_range') is not None else ''},{section.get('extrapolated_height_range', '') if section.get('extrapolated_height_range') is not None else ''},{section.get('original_min_z', '') if section.get('original_min_z') is not None else ''},{section.get('extrapolated_min_z', '') if section.get('extrapolated_min_z') is not None else ''},{section.get('num_extrapolated_circles', '') if section.get('num_extrapolated_circles') is not None else ''},{section.get('ground_level_used', '') if section.get('ground_level_used') is not None else ''}")
             else:
                 csv_lines.append(f"TREE_SUMMARY,{tree_data['tree_id']},{tree_data['total_volume']:.4f},{dbh_str},{tree_data['avg_diameter']:.4f},{tree_data['min_diameter']:.4f},{tree_data['max_diameter']:.4f},{height_range},{tree_data['total_sections']}")
 
