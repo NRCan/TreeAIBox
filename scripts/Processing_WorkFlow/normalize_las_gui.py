@@ -12,9 +12,48 @@ import sys
 import os
 import re
 import sqlite3
+import shutil
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QFileDialog, QTextEdit, QListWidget, QMessageBox, QRadioButton, QButtonGroup
 )
+
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, os.pardir, os.pardir, os.pardir))
+
+
+def _first_existing_path(*paths):
+    for path in paths:
+        if path and os.path.isfile(path):
+            return path
+    return ''
+
+
+def get_default_tool_path(tool_name):
+    tool_name = tool_name.lower()
+    if tool_name == 'clipdata64.exe':
+        return _first_existing_path(
+            os.path.join(REPO_ROOT, 'Fusion', 'clipdata64.exe'),
+            os.path.join(REPO_ROOT, 'Fusion', 'clipdata.exe'),
+            shutil.which('clipdata64.exe'),
+            shutil.which('clipdata.exe'),
+        )
+    if tool_name == 'lasinfo64.exe':
+        return _first_existing_path(
+            os.path.join(REPO_ROOT, 'LAStools', 'bin', 'lasinfo64.exe'),
+            os.path.join(REPO_ROOT, 'LAStools', 'bin', 'lasinfo.exe'),
+            shutil.which('lasinfo64.exe'),
+            shutil.which('lasinfo.exe'),
+        )
+    return ''
+
+
+def resolve_tool_path(path_value, tool_name):
+    if path_value and os.path.isfile(path_value):
+        return path_value
+    return get_default_tool_path(tool_name)
+
+
 def normalize_las_files(in_dir, out_dir, ground_dtm, clipdata_path, lasinfo_path):
     """
     Normalize all LAS files in in_dir using FUSION's clipdata64.exe and lasinfo64.exe.
@@ -24,6 +63,8 @@ def normalize_las_files(in_dir, out_dir, ground_dtm, clipdata_path, lasinfo_path
     import json
     output_files = []
     errors = []
+    clipdata_path = resolve_tool_path(clipdata_path, 'clipdata64.exe')
+    lasinfo_path = resolve_tool_path(lasinfo_path, 'lasinfo64.exe')
     if not all([in_dir, out_dir, clipdata_path, lasinfo_path]):
         errors.append('Missing required paths.')
         return output_files, errors
@@ -94,6 +135,14 @@ def load_setting(key):
     row = c.fetchone()
     conn.close()
     return row[0] if row else ''
+
+
+def load_or_default_tool_path(key, tool_name):
+    stored_value = load_setting(key)
+    resolved_value = resolve_tool_path(stored_value, tool_name)
+    if resolved_value and resolved_value != stored_value:
+        save_setting(key, resolved_value)
+    return resolved_value or stored_value
 
 class NormalizeLasApp(QWidget):
 
@@ -251,8 +300,8 @@ class NormalizeLasApp(QWidget):
         self.in_edit.setText(load_setting('las_input_folder'))
         self.single_file_edit.setText(load_setting('las_single_file'))
         self.out_edit.setText(load_setting('las_output_folder'))
-        self.clipdata_edit.setText(load_setting('clipdata_path'))
-        self.lasinfo_edit.setText(load_setting('lasinfo_path'))
+        self.clipdata_edit.setText(load_or_default_tool_path('clipdata_path', 'clipdata64.exe'))
+        self.lasinfo_edit.setText(load_or_default_tool_path('lasinfo_path', 'lasinfo64.exe'))
         self.ground_edit.setText(load_setting('ground_dtm'))
         
         # Load mode preference
@@ -279,9 +328,16 @@ class NormalizeLasApp(QWidget):
         save_setting('processing_mode', 'single' if self.single_mode.isChecked() else 'folder')
         
         out_dir = self.out_edit.text().strip()
-        clipdata_path = self.clipdata_edit.text().strip()
-        lasinfo_path = self.lasinfo_edit.text().strip()
+        clipdata_path = resolve_tool_path(self.clipdata_edit.text().strip(), 'clipdata64.exe')
+        lasinfo_path = resolve_tool_path(self.lasinfo_edit.text().strip(), 'lasinfo64.exe')
         ground_dtm = self.ground_edit.text().strip()
+
+        if clipdata_path:
+            self.clipdata_edit.setText(clipdata_path)
+            save_setting('clipdata_path', clipdata_path)
+        if lasinfo_path:
+            self.lasinfo_edit.setText(lasinfo_path)
+            save_setting('lasinfo_path', lasinfo_path)
         
         if not all([out_dir, clipdata_path, lasinfo_path, ground_dtm]):
             QMessageBox.warning(self, 'Missing Info', 'Please select all required paths.')

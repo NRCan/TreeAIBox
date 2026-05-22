@@ -3767,6 +3767,33 @@ class TreeVisualizerGUI(QMainWindow):
             self.accumulated_volume_sections = []
             self.log_to_console("🔄 Cleared previous volume results.")
 
+            # Use the same default volume folder as the manual save/load path so
+            # batch output lands where the Load Data button already looks.
+            if self.volume_folder_path and os.path.exists(self.volume_folder_path):
+                folder = self.volume_folder_path
+            else:
+                base_dir = None
+                las_basename = None
+                try:
+                    if getattr(self, 'current_las_path', None):
+                        base_dir = os.path.dirname(self.current_las_path)
+                        las_basename = os.path.splitext(os.path.basename(self.current_las_path))[0]
+                except Exception:
+                    base_dir = None
+                    las_basename = None
+
+                if not base_dir:
+                    base_dir = os.getcwd()
+                    las_basename = "volume_data"
+
+                folder = os.path.join(base_dir, 'volume', las_basename)
+
+            os.makedirs(folder, exist_ok=True)
+            self.volume_folder_path = folder
+            if hasattr(self, 'volume_folder_label'):
+                self.volume_folder_label.setText(f"Volume Folder: {os.path.basename(folder)}")
+            self.log_to_console(f"📁 Batch volume folder set to: {folder}")
+
             processed_count = 0
             skipped_trees = []
 
@@ -3823,6 +3850,10 @@ class TreeVisualizerGUI(QMainWindow):
                     self._select_all_points_silent()
                     QApplication.processEvents()
                     self._calculate_volume_silent()
+                    QApplication.processEvents()
+
+                    # Persist the current tree's volume data before clearing it for the next tree.
+                    self._save_volume_data_silent()
                     QApplication.processEvents()
 
                     # Export this tree's metrics using the existing export feature, then clear for the next tree.
@@ -7773,40 +7804,7 @@ Important:
                 QMessageBox.warning(self, "No Tree Files", f"No tree_*.json files found in {folder}")
                 return
 
-            # Prefer loading only the tree(s) currently shown in the plotter.
-            visualized_tree_ids = set()
-            if hasattr(self, 'get_visualized_tree_ids'):
-                try:
-                    visualized_tree_ids = set(str(tid) for tid in self.get_visualized_tree_ids())
-                except Exception:
-                    visualized_tree_ids = set()
-
-            # Fallback to a single current_tree_id when available.
-            if not visualized_tree_ids and hasattr(self, 'current_tree_id') and self.current_tree_id is not None:
-                current_tree_id_str = str(self.current_tree_id)
-                try:
-                    visualized_tree_ids = {str(int(current_tree_id_str))}
-                except ValueError:
-                    visualized_tree_ids = set()
-
-            if visualized_tree_ids:
-                filtered_tree_files = []
-                for tree_file in tree_files:
-                    filename = os.path.basename(tree_file)
-                    tree_id = filename.replace('tree_', '').replace('.json', '')
-                    if tree_id in visualized_tree_ids:
-                        filtered_tree_files.append(tree_file)
-                if filtered_tree_files:
-                    self.log_to_console(
-                        f"📂 Found {len(tree_files)} tree files in folder, loading only visualized tree(s): {sorted(visualized_tree_ids)}"
-                    )
-                    tree_files = filtered_tree_files
-                else:
-                    self.log_to_console(
-                        f"⚠️ No matching volume file found for visualized tree(s) {sorted(visualized_tree_ids)}. Falling back to all files."
-                    )
-            else:
-                self.log_to_console(f"📂 Found {len(tree_files)} tree files in selected folder. Loading all files...")
+            self.log_to_console(f"📂 Found {len(tree_files)} tree files in selected folder. Loading all files...")
 
             # Clear existing volume data if any
             if self.accumulated_volume_sections:
