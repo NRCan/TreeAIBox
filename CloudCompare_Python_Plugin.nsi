@@ -446,20 +446,29 @@ Section "Install Python Packages" SecInstall
     FileWrite $0 'echo Installing Python packages...$\r$\n'
     FileWrite $0 '"$PythonPath" -m pip install --upgrade pip$\r$\n'
     
+    ; NOTE: --force-reinstall is essential. CloudCompare ships its own embedded
+    ; Python, and a CloudCompare upgrade can change that Python's version (e.g.
+    ; 3.10 -> 3.12). Without --force-reinstall, pip sees "torch==2.5.1 already
+    ; installed" and SKIPS it, leaving wheels built for the OLD Python in place
+    ; (they then fail to load). --force-reinstall replaces them with wheels
+    ; matching the current embedded Python, so simply re-running this installer
+    ; after a CloudCompare update repairs everything. Cached wheels are reused,
+    ; so a re-run on the same Python version does not re-download.
+
     ; Install PyTorch based on GPU detection
     ${If} $HasNvidiaGPU == "1"
         DetailPrint "Installing CUDA-enabled PyTorch..."
         FileWrite $0 'echo Installing CUDA-enabled PyTorch...$\r$\n'
-        FileWrite $0 '"$PythonPath" -m pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121$\r$\n'
+        FileWrite $0 '"$PythonPath" -m pip install --force-reinstall torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121$\r$\n'
     ${Else}
         DetailPrint "Installing CPU-only PyTorch..."
         FileWrite $0 'echo Installing CPU-only PyTorch...$\r$\n'
-        FileWrite $0 '"$PythonPath" -m pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cpu$\r$\n'
+        FileWrite $0 '"$PythonPath" -m pip install --force-reinstall torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cpu$\r$\n'
     ${EndIf}
-    
-    ; Install other required packages
+
+    ; Install other required packages (pinned to the validated set)
     FileWrite $0 'echo Installing other required packages...$\r$\n'
-    FileWrite $0 '"$PythonPath" -m pip install PyQt6 PyQt6-WebEngine requests numpy_indexed timm numpy_groupies cut_pursuit_py circle_fit scikit-learn scikit-image$\r$\n'
+    FileWrite $0 '"$PythonPath" -m pip install --force-reinstall PyQt6==6.9.1 PyQt6-WebEngine==6.9.0 requests==2.32.4 numpy==1.26.4 numpy_indexed==0.3.7 numpy_groupies==0.11.3 timm==1.0.15 cut_pursuit_py==1.0.12 circle_fit==0.2.1 scikit-learn==1.6.1 scikit-image==0.25.2$\r$\n'
     FileWrite $0 'if %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%$\r$\n'
     FileClose $0
     
@@ -497,6 +506,7 @@ Section "Install Python Packages" SecInstall
     File /oname=model_zoo.json "model_zoo.json"
     File /oname=treeaibox_ui.html "treeaibox_ui.html"
     File /oname=dl_visualization.svg "dl_visualization.svg"
+    File /oname=LICENSE.txt "LICENSE.txt"
     
     ; Create and copy directories with their contents
     CreateDirectory "$CCPath\plugins\Python\Plugins\TreeAIBox\img"

@@ -1,0 +1,24 @@
+# Local scratch / working area (demo data, drafts, notes)
+sandbox/
+
+# IDE
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+env/
+
+# MkDocs build output
+site/
+.cache/
+
+# Built installer (distribute via GitHub Releases, not the repo)
+*.exe
+
+# OS cruft
+.DS_Store
+Thumbs.db

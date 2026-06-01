@@ -1,0 +1,21 @@
+# TreeAIBox Python dependencies.
+#
+# NOTE: torch / torchvision / torchaudio are intentionally NOT listed here.
+# They must come from a platform/GPU-specific index (CUDA on Windows/Linux,
+# CPU+MPS on macOS), so install.py installs them separately. See install.py.
+#
+# Versions below are the validated set (Python 3.12). install.py installs
+# these into an isolated virtual environment that matches CloudCompare's
+# embedded Python version.
+
+PyQt6==6.9.1
+PyQt6-WebEngine==6.9.0
+requests==2.32.4
+numpy==1.26.4
+numpy_indexed==0.3.7
+numpy_groupies==0.11.3
+timm==1.0.15
+cut_pursuit_py==1.0.12
+circle_fit==0.2.1
+scikit-learn==1.6.1
+scikit-image==0.25.2

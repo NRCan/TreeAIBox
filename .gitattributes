@@ -1,0 +1,12 @@
+# Keep Unix shell scripts LF so they run on macOS/Linux even when checked out
+# on Windows (where core.autocrlf may be true).
+*.sh         text eol=lf
+*.command    text eol=lf
+
+# Treat installer/model binaries as binary (no EOL or diff munging)
+*.exe        binary
+*.bmp        binary
+*.ico        binary
+*.png        binary
+*.jpg        binary
+*.laz        binary

@@ -56,50 +56,48 @@ TreeAIBox brings together four core LiDAR-processing workflows in a single GUI:
 
 ## 🛠️ Installation
 
-### 1. Via Windows installer (Suggested)
+CloudCompare ships its **own embedded Python**, so you do **not** need to install Python yourself. Pick your operating system below.
 
-A ready-to-run online installer is provided. Ensure **internet access** is enabled:
+> ℹ️ **Internet access is required** — the installer downloads the AI/runtime packages (≈ 2.5 GB with CUDA).
+> 🔁 **After updating CloudCompare, simply run the installer again** — it repairs the plugin for the new Python version.
 
-1. **Install CloudCompare**
-   
-   Download and install **CloudCompare v2.14.alpha** (latest release) from
-   [https://cloudcompare-org.danielgm.net/release/](https://cloudcompare-org.danielgm.net/release/)
+### 🪟 Windows — one-click installer (recommended)
 
-2. **Download the TreeAIBox Installer**
-   
-   Get **TreeAIBox\_Plugin\_Installer\_v1.0.exe** from our releases page:
-   [https://github.com/NRCan/TreeAIBox/releases](https://github.com/NRCan/TreeAIBox/releases)
+1. Install the latest **CloudCompare** from [cloudcompare.org/release](https://www.cloudcompare.org/release/).
+2. Download **`TreeAIBox_Plugin_Installer.exe`** from the [releases page](https://github.com/NRCan/TreeAIBox/releases).
+3. **Right-click → Run as administrator**, then follow the prompts.
 
-3. **Run the Installer**
+The installer auto-detects CloudCompare, detects your NVIDIA GPU (installs CUDA PyTorch, otherwise CPU PyTorch), installs all packages into CloudCompare's embedded Python, copies the plugin files (including `LICENSE.txt`), and registers TreeAIBox. Restart CloudCompare when it finishes, then launch **TreeAIBox** from the Python plugin toolbar.
 
-   * Right-click **TreeAIBox\_Plugin\_Installer\_v1.0.exe** and choose **Run as administrator**.
-   * Follow the on-screen prompts. By default, the installer will detect your CloudCompare folder (e.g., `%PROGRAMFILES%\CloudCompare`) from the registry.
+### 🍎 macOS
 
-   **What Installer does:**
+1. Install a CloudCompare build that includes the Python plugin.
+2. Download or clone this repository.
+3. In Finder, double-click **`install_macos.command`** (the first time, you may need `chmod +x install_macos.command`, or run `bash install_macos.command` in Terminal). It builds an isolated environment matching CloudCompare's Python and installs all packages (CPU + Apple **Metal/MPS**; CUDA does not exist on macOS).
+4. In CloudCompare: **Plugins → Python Plugin → Show Settings → "local"**, and select the environment folder it prints (`~/Library/Application Support/TreeAIBox/env`). Restart CloudCompare.
+5. Register the plugin: **Python Plugin → Register a script** → select `TreeAIBox.py`.
 
-   * Copies all Python scripts, UI files, images, and modules into:
+### 🐧 Linux
 
-     ```
-     …\CloudCompare\plugins\Python\Plugins\TreeAIBox\
-     ```
-   * Generates a helper batch script to detect your NVIDIA GPU and install the matching PyTorch wheel.
-   * Launches `pip` to install required Python packages (e.g., PyQt6, torch, requests).
+1. Install CloudCompare (flatpak, or a build that includes the Python plugin).
+2. Download or clone this repository.
+3. Run **`bash install_linux.sh`**. It installs all packages (CUDA for NVIDIA GPUs, otherwise CPU) into an isolated environment; for the flatpak it also grants the required filesystem access.
+4. In CloudCompare: **Plugins → Python Plugin → Show Settings → "local"**, select the printed environment folder (`~/.local/share/TreeAIBox/env`). Restart CloudCompare.
+5. Register the plugin: **Python Plugin → Register a script** → select `TreeAIBox.py`.
 
-4. **Finish Up**
+### 🔧 Advanced / manual (any OS)
 
-   Once installation completes, restart CloudCompare and launch TreeAIBox from the Python console.
-
-> **Note:** The NSIS script (`CloudCompare_Python_Plugin.nsi`) can be edited if you need to customize install paths or package versions.
-
-### 2. Alternatively, manual (Git + pip)
+`install.py` is the cross-platform engine used by the macOS/Linux scripts. Run it directly with **CloudCompare's own Python**:
 
 ```bash
-cd %PROGRAMFILES%\CloudCompare\plugins\Python\Plugins
-git clone https://github.com/NRCan/TreeAIBox.git TreeAIBox
-pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
-pip install PyQt6 PyQt6-WebEngine requests numpy_indexed timm numpy_groupies cut_pursuit_py circle_fit scikit-learn scikit-image
+"<CloudCompare-python>" install.py             # build environment + install dependencies
+"<CloudCompare-python>" install.py --gpu cpu   # force CPU PyTorch
+"<CloudCompare-python>" install.py --recreate  # rebuild the environment from scratch
 ```
-Under CloudCompare’s Script Register menu, click Add Script, then browse to and select TreeAIBox.py to register it.
+
+Then point CloudCompare at the printed environment via **Plugins → Python Plugin → Show Settings → "local"**, and register `TreeAIBox.py`.
+
+> **Note:** The Windows installer is built from the NSIS script `CloudCompare_Python_Plugin.nsi`, which you can edit to customize paths or package versions.
 
 ## ▶️ Usage
 
@@ -386,52 +384,48 @@ TreeAIBox regroupe quatre flux de travail LiDAR essentiels dans une seule interf
 
 ## 🛠️ Installation
 
-### 1. Via l’installateur Windows (recommandé)
+CloudCompare embarque **son propre Python intégré** : vous n'avez donc **pas** besoin d'installer Python vous-même. Choisissez votre système d'exploitation ci-dessous.
 
-Un installateur en ligne prêt à l’emploi est fourni. Assurez-vous que **l’accès Internet** est activé :
+> ℹ️ **Un accès Internet est requis** — l'installateur télécharge les paquets IA/exécution (≈ 2,5 Go avec CUDA).
+> 🔁 **Après une mise à jour de CloudCompare, relancez simplement l'installateur** — il répare le plugin pour la nouvelle version de Python.
 
-1. **Installer CloudCompare**
+### 🪟 Windows — installateur en un clic (recommandé)
 
-   Téléchargez et installez **CloudCompare v2.14.alpha** (dernière version) depuis
-   [https://cloudcompare-org.danielgm.net/release/](https://cloudcompare-org.danielgm.net/release/)
+1. Installez la dernière version de **CloudCompare** depuis [cloudcompare.org/release](https://www.cloudcompare.org/release/).
+2. Téléchargez **`TreeAIBox_Plugin_Installer.exe`** depuis la [page des releases](https://github.com/NRCan/TreeAIBox/releases).
+3. **Clic droit → Exécuter en tant qu'administrateur**, puis suivez les instructions.
 
-2. **Télécharger l’installateur TreeAIBox**
+L'installateur détecte CloudCompare, détecte votre GPU NVIDIA (installe PyTorch CUDA, sinon PyTorch CPU), installe tous les paquets dans le Python intégré de CloudCompare, copie les fichiers du plugin (y compris `LICENSE.txt`) et enregistre TreeAIBox. Redémarrez CloudCompare une fois terminé, puis lancez **TreeAIBox** depuis la barre d'outils du plugin Python.
 
-   Récupérez **TreeAIBox\_Plugin\_Installer\_v1.0.exe** depuis notre page de releases :
-   [https://github.com/NRCan/TreeAIBox/releases](https://github.com/NRCan/TreeAIBox/releases)
+### 🍎 macOS
 
-3. **Exécuter l’installateur**
+1. Installez une version de CloudCompare incluant le plugin Python.
+2. Téléchargez ou clonez ce dépôt.
+3. Dans le Finder, double-cliquez sur **`install_macos.command`** (la première fois, il peut être nécessaire de faire `chmod +x install_macos.command`, ou d'exécuter `bash install_macos.command` dans le Terminal). Il crée un environnement isolé correspondant au Python de CloudCompare et installe tous les paquets (CPU + Apple **Metal/MPS** ; CUDA n'existe pas sur macOS).
+4. Dans CloudCompare : **Plugins → Python Plugin → Show Settings → « local »**, puis sélectionnez le dossier d'environnement affiché (`~/Library/Application Support/TreeAIBox/env`). Redémarrez CloudCompare.
+5. Enregistrez le plugin : **Python Plugin → Register a script** → sélectionnez `TreeAIBox.py`.
 
-   * Faites un clic droit sur **TreeAIBox\_Plugin\_Installer\_v1.0.exe** et choisissez **Exécuter en tant qu’administrateur**.
-   * Suivez les instructions à l’écran. Par défaut, l’installateur détecte le dossier CloudCompare (ex. `%PROGRAMFILES%\CloudCompare`) via le registre.
+### 🐧 Linux
 
-   **Ce que fait l'installateur**
+1. Installez CloudCompare (flatpak, ou une version incluant le plugin Python).
+2. Téléchargez ou clonez ce dépôt.
+3. Exécutez **`bash install_linux.sh`**. Il installe tous les paquets (CUDA pour les GPU NVIDIA, sinon CPU) dans un environnement isolé ; pour le flatpak, il accorde aussi l'accès au système de fichiers nécessaire.
+4. Dans CloudCompare : **Plugins → Python Plugin → Show Settings → « local »**, sélectionnez le dossier d'environnement affiché (`~/.local/share/TreeAIBox/env`). Redémarrez CloudCompare.
+5. Enregistrez le plugin : **Python Plugin → Register a script** → sélectionnez `TreeAIBox.py`.
 
-   * Copie tous les scripts Python, fichiers UI, images et modules dans :
+### 🔧 Avancé / manuel (tout système)
 
-     ```
-     …\CloudCompare\plugins\Python\Plugins\TreeAIBox\  
-     ```
-   * Génère un script batch d’aide pour détecter votre GPU NVIDIA et installer la roue PyTorch correspondante.
-   * Lance `pip` pour installer les paquets Python requis (par ex. PyQt6, torch, requests).
-
-4. **Finalisation**
-
-   Une fois l’installation terminée, redémarrez CloudCompare et lancez TreeAIBox depuis la console Python.
-
-> **Remarque :** Le script NSIS (`CloudCompare_Python_Plugin.nsi`) peut être modifié si vous devez personnaliser les chemins d’installation ou les versions des paquets.
-
-
-### 2. Alternative manuelle (Git + pip)
+`install.py` est le moteur multiplateforme utilisé par les scripts macOS/Linux. Exécutez-le directement avec **le Python de CloudCompare** :
 
 ```bash
-cd %PROGRAMFILES%\CloudCompare\plugins\Python\Plugins
-git clone https://github.com/NRCan/TreeAIBox.git TreeAIBox
-pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
-pip install PyQt6 PyQt6-WebEngine requests numpy_indexed timm numpy_groupies cut_pursuit_py circle_fit scikit-learn scikit-image
-````
+"<python-de-CloudCompare>" install.py             # crée l'environnement + installe les dépendances
+"<python-de-CloudCompare>" install.py --gpu cpu   # force PyTorch CPU
+"<python-de-CloudCompare>" install.py --recreate  # reconstruit l'environnement de zéro
+```
 
-Dans CloudCompare, enregistrez `TreeAIBox.py` via le bouton « Add Script » du menu Script Register.
+Pointez ensuite CloudCompare vers l'environnement affiché via **Plugins → Python Plugin → Show Settings → « local »**, et enregistrez `TreeAIBox.py`.
+
+> **Remarque :** L'installateur Windows est généré à partir du script NSIS `CloudCompare_Python_Plugin.nsi`, que vous pouvez modifier pour personnaliser les chemins ou les versions des paquets.
 
 ## ▶️ Utilisation
 

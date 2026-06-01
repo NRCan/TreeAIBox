@@ -1,0 +1,56 @@
+site_name: TreeAIBox
+site_description: Deep-learning LiDAR forest analysis plugin for CloudCompare — installation and workshop tutorial.
+site_url: https://nrcan.github.io/TreeAIBox/
+repo_url: https://github.com/NRCan/TreeAIBox
+repo_name: NRCan/TreeAIBox
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: green
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: green
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Workshop tutorial:
+      - Demo data: data.md
+      - "1 · UAV LiDAR": tutorial-uav.md
+      - "2 · ALS LiDAR": tutorial-als.md
+      - "3 · TLS LiDAR": tutorial-tls.md
+      - "4 · QSM / architecture": tutorial-qsm.md
+  - References: references.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
+
+plugins:
+  - search
