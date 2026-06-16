@@ -1,5 +1,6 @@
 import numpy as np
 import numpy_indexed as npi
+import time
 
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
@@ -93,19 +94,29 @@ def cluster_graph(graph,node_total,target_idx):
 
 def shortestpath3D(points,stemcls,base_loc,min_res=0.06, max_isolated_distance = 0.3, progress_callback=lambda x: None):
 
+    start_time = time.perf_counter()
+
+    def log_step(message):
+        elapsed = time.perf_counter() - start_time
+        print(f"[stemCluster][{elapsed:8.2f}s] {message}", flush=True)
+
     if stemcls is None:
+        log_step(f"Starting shortestpath3D with points shape={points.shape}, stemcls=None, base_loc shape={base_loc.shape}, min_res={min_res}, max_isolated_distance={max_isolated_distance}")
         pcd = points
         stem_idx=None
     else:
+        log_step(f"Starting shortestpath3D with points shape={points.shape}, stemcls shape={stemcls.shape}, base_loc shape={base_loc.shape}, min_res={min_res}, max_isolated_distance={max_isolated_distance}")
         stem_idx = np.where(stemcls>1)[0]
         if len(stem_idx) == 0:
-            print("There are no stem points")
+            print("There are no stem points", flush=True)
             return
         pcd = points[stem_idx]
+        log_step(f"Filtered stem points: {len(stem_idx)} / {len(points)}")
 
-
+    log_step(f"Decimating point cloud with voxel size {min_res}")
     dec_idx_uidx, dec_inverse_idx = decimate_pcd(pcd[:, :3], min_res)  # reduce point number first to avoid computation overhead
     pcd_dec = pcd[dec_idx_uidx]
+    log_step(f"Decimation complete: {len(dec_idx_uidx)} unique voxels / {len(pcd)} points")
     pcd_dec_min=np.min(pcd_dec[:,:3],axis=0)
     pcd_dec[:,:3]=pcd_dec[:,:3]-pcd_dec_min
 
@@ -115,15 +126,19 @@ def shortestpath3D(points,stemcls,base_loc,min_res=0.06, max_isolated_distance =
     progress_callback(15)
 
     #create connectivity graph and separate into connected components
+    log_step(f"Building sparse graph for decimated cloud: n={len(pcd_dec)}, k={min(len(pcd_dec),10)}, max_distance={min_res * 3}")
     graph = create_sparse_graph(pcd_dec[:, :3], k=min(len(pcd_dec),10), max_distance=min_res * 3)
     n_comps, conn_labels = connected_components(graph, directed=False, return_labels=True)
+    log_step(f"Connected components found: {n_comps}")
 
     progress_callback(30)
 
     #find the points nearest to the base locations as the base points
+    log_step(f"Querying nearest decimated points for {len(pcd_base_loc)} base locations")
     kdtree = cKDTree(pcd_dec[:,:3])
     distances, indices = kdtree.query(pcd_base_loc[:,:3])
     conn_base_idx=conn_labels[indices] #get the component ID of base points as the base IDs
+    log_step(f"Base points mapped to {len(np.unique(conn_base_idx))} connected components")
 
     #the return_inverse from np.unique function can be used to group the conn_labels into lists (or split the arrays into lists by the unique conn_labels)
     _, comp_inverse_idx, comp_size = np.unique(conn_labels, return_inverse=True, return_counts=True)
@@ -136,18 +151,24 @@ def shortestpath3D(points,stemcls,base_loc,min_res=0.06, max_isolated_distance =
     to_split_idx=np.where(base_per_conn_counts>1)[0]
     conn_idxs_to_split=conn_base_idx_unq[to_split_idx]
     base_per_conn_counts=base_per_conn_counts[to_split_idx].astype(np.int32)
+    log_step(f"Components requiring split: {len(conn_idxs_to_split)}")
 
     conn_labels_split=conn_labels
     max_counter=n_comps
     for i,conn_idx_to_split in enumerate(conn_idxs_to_split):
         comp_pts=pcd_dec[comp_idx_groups[conn_idx_to_split],:3]
-        bgm = BayesianGaussianMixture(n_components=base_per_conn_counts[i], init_params="k-means++",random_state=42).fit(comp_pts)
+        comp_size = len(comp_pts)
+        n_components = int(base_per_conn_counts[i])
+        log_step(f"Fitting BayesianGaussianMixture for component {i+1}/{len(conn_idxs_to_split)}: conn_idx={int(conn_idx_to_split)}, points={comp_size}, n_components={n_components}")
+        bgm = BayesianGaussianMixture(n_components=n_components, init_params="k-means++",random_state=42).fit(comp_pts)
         labels = bgm.predict(comp_pts)
         conn_labels_split[comp_idx_groups[conn_idx_to_split]]=labels+max_counter
         max_counter+=base_per_conn_counts[i]
+        log_step(f"Component {i+1}/{len(conn_idxs_to_split)} split complete")
 
     _, conn_labels, comp_size = np.unique(conn_labels_split, return_inverse=True, return_counts=True)#re-order the component labels from 0-N
     conn_base_idx=conn_labels[indices] #update base IDs with new component IDs of base points
+    log_step(f"Re-labeled connected components: {len(comp_size)} final components")
 
     n_comps=len(comp_size)
     #return_inverse of the np.unique function is my favorite way to restore the connected component ids (unique values of conn_labels)
@@ -157,15 +178,19 @@ def shortestpath3D(points,stemcls,base_loc,min_res=0.06, max_isolated_distance =
     progress_callback(50)
 
     #created a connectivity graph with pairs of nearest K nodes, their minimal 3D point distance to be the edge weight.
+    log_step(f"Building node graph for {n_comps} components")
     comp_graph, comp_total = create_node_graph(np.concatenate([pcd_dec[:,:3], conn_labels[:, np.newaxis]], axis=-1), k=10, max_distance=max_isolated_distance)
+    log_step(f"Node graph complete: comp_total={comp_total}")
 
     progress_callback(70)
 
     # For each node, find its associated stem node ID with the shortest path among all other stem nodes, and then assign the base ID of this stem node to this node
+    log_step("Running shortest-path clustering on node graph")
     seg_pred, seg_total = cluster_graph(comp_graph, n_comps, conn_base_idx)
     # Map IDs from node to point based on the inverse indices
     # (1. from node to decimated point cloud, 2. from decimated to original point cloud)
     all_pred = seg_pred[comp_inverse_idx][dec_inverse_idx].astype(np.int32)
+    log_step(f"Shortest-path clustering complete: seg_total={seg_total}, output labels={len(all_pred)}")
 
     pcd_pred_labels=np.zeros(len(points))
     if stemcls is None:
@@ -176,6 +201,7 @@ def shortestpath3D(points,stemcls,base_loc,min_res=0.06, max_isolated_distance =
         pcd_pred_labels[stem_idx]=all_pred+1
 
     progress_callback(100)
+    log_step(f"shortestpath3D finished in {time.perf_counter() - start_time:.2f}s")
     return pcd_pred_labels
 
 
