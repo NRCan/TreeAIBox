@@ -160,10 +160,16 @@ def shortestpath3D(points,stemcls,base_loc,min_res=0.06, max_isolated_distance =
         comp_size = len(comp_pts)
         n_components = int(base_per_conn_counts[i])
         log_step(f"Fitting BayesianGaussianMixture for component {i+1}/{len(conn_idxs_to_split)}: conn_idx={int(conn_idx_to_split)}, points={comp_size}, n_components={n_components}")
-        bgm = BayesianGaussianMixture(n_components=n_components, init_params="k-means++",random_state=42).fit(comp_pts)
-        labels = bgm.predict(comp_pts)
-        conn_labels_split[comp_idx_groups[conn_idx_to_split]]=labels+max_counter
-        max_counter+=base_per_conn_counts[i]
+        if comp_size < 2:
+            # Skip splitting for components with fewer than 2 points (BayesianGaussianMixture requires at least 2 samples)
+            log_step(f"Component {i+1}/{len(conn_idxs_to_split)} skipped: only {comp_size} point(s), keeping as single component")
+            conn_labels_split[comp_idx_groups[conn_idx_to_split]] = max_counter
+            max_counter += 1
+        else:
+            bgm = BayesianGaussianMixture(n_components=n_components, init_params="k-means++",random_state=42).fit(comp_pts)
+            labels = bgm.predict(comp_pts)
+            conn_labels_split[comp_idx_groups[conn_idx_to_split]]=labels+max_counter
+            max_counter+=base_per_conn_counts[i]
         log_step(f"Component {i+1}/{len(conn_idxs_to_split)} split complete")
 
     _, conn_labels, comp_size = np.unique(conn_labels_split, return_inverse=True, return_counts=True)#re-order the component labels from 0-N
