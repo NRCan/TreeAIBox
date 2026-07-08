@@ -36398,3 +36398,36 @@ Clipped data file produced:
    D:/Enhanced Forest Inventory/Data/Plot_Polygon/Column_Volume\clipped_to_polygon\clipped_8_20260407_LLR_L2_normalized.las    May 21, 2026 @ 9:30 PM
 Run finished: Thu May 21 21:30:25 2026 (elapsed time: 193 seconds)
 Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: "C:\Users\W0491597\Documents\Arun\TreeAIBox (2)\TreeAIBox\Fusion\PolyClipData.exe"  /verbose /shape:3,Area#1 "D:/Enhanced Forest Inventory/Data/Plot_Polygon/Crossflight_Clip\CrossFlight_Clip.shp" "D:/Enhanced Forest Inventory/Data/Plot_Polygon/Crossflight_Clip\clipped_to_polygon\clipped_Area#1_20251022_LLR_Crossed_MatchPasses.las" "D:/Enhanced Forest Inventory/Data/New DataStore/2025/Shreddy/20251022_LLR_Crossed_MatchPasses.las"
+Run started: Wed Jun 17 12:00:58 2026
+   D:/Enhanced Forest Inventory/Data/New DataStore/2025/Shreddy/20251022_LLR_Crossed_MatchPasses.las: 831484040 points
+   Clipping D:/Enhanced Forest Inventory/Data/New DataStore/2025/Shreddy/20251022_LLR_Crossed_MatchPasses.las...100444998 points out of 831484040 written to output file
+Clipped data file produced:
+   D:/Enhanced Forest Inventory/Data/Plot_Polygon/Crossflight_Clip\clipped_to_polygon\clipped_Area#1_20251022_LLR_Crossed_MatchPasses.las    Jun 17, 2026 @ 12:07 AM
+Run finished: Wed Jun 17 12:07:18 2026 (elapsed time: 380 seconds)
+Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: "C:\Users\W0491597\Documents\Arun\TreeAIBox (2)\TreeAIBox\Fusion\PolyClipData.exe"  /verbose /shape:3,Area#2 "D:/Enhanced Forest Inventory/Data/Plot_Polygon/Crossflight_Clip\CrossFlight_Clip.shp" "D:/Enhanced Forest Inventory/Data/Plot_Polygon/Crossflight_Clip\clipped_to_polygon\clipped_Area#2_20251022_LLR_Crossed_MatchPasses.las" "D:/Enhanced Forest Inventory/Data/New DataStore/2025/Shreddy/20251022_LLR_Crossed_MatchPasses.las"
+Run started: Wed Jun 17 12:07:18 2026
+   D:/Enhanced Forest Inventory/Data/New DataStore/2025/Shreddy/20251022_LLR_Crossed_MatchPasses.las: 831484040 points
+   Clipping D:/Enhanced Forest Inventory/Data/New DataStore/2025/Shreddy/20251022_LLR_Crossed_MatchPasses.las...211599788 points out of 831484040 written to output file
+Clipped data file produced:
+   D:/Enhanced Forest Inventory/Data/Plot_Polygon/Crossflight_Clip\clipped_to_polygon\clipped_Area#2_20251022_LLR_Crossed_MatchPasses.las    Jun 17, 2026 @ 12:12 AM
+Run finished: Wed Jun 17 12:12:53 2026 (elapsed time: 335 seconds)
+Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: "C:\Users\W0491597\Documents\Arun\TreeAIBox (2)\TreeAIBox\Fusion\PolyClipData.exe"  /verbose /shape:3,Area#3 "D:/Enhanced Forest Inventory/Data/Plot_Polygon/Crossflight_Clip\CrossFlight_Clip.shp" "D:/Enhanced Forest Inventory/Data/Plot_Polygon/Crossflight_Clip\clipped_to_polygon\clipped_Area#3_20251022_LLR_Crossed_MatchPasses.las" "D:/Enhanced Forest Inventory/Data/New DataStore/2025/Shreddy/20251022_LLR_Crossed_MatchPasses.las"
+Run started: Wed Jun 17 12:12:53 2026
+   D:/Enhanced Forest Inventory/Data/New DataStore/2025/Shreddy/20251022_LLR_Crossed_MatchPasses.las: 831484040 points
+   Clipping D:/Enhanced Forest Inventory/Data/New DataStore/2025/Shreddy/20251022_LLR_Crossed_MatchPasses.las...266979006 points out of 831484040 written to output file
+Clipped data file produced:
+   D:/Enhanced Forest Inventory/Data/Plot_Polygon/Crossflight_Clip\clipped_to_polygon\clipped_Area#3_20251022_LLR_Crossed_MatchPasses.las    Jun 17, 2026 @ 12:18 AM
+Run finished: Wed Jun 17 12:18:52 2026 (elapsed time: 359 seconds)
+Done
