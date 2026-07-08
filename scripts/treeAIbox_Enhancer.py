@@ -624,6 +624,8 @@ class TreeVisualizerGUI(QMainWindow):
         self.polygon_points = []
         self.selected_polygon = None
         self.selected_point_indices = None
+        self.radius_selection_active = False
+        self.radius_selection_center = None
         
         # Volume calculation accumulation variables
         self.accumulated_volume_sections = []  # List of (points, circles_data) tuples
@@ -1206,6 +1208,27 @@ class TreeVisualizerGUI(QMainWindow):
         self.draw_polygon_button.setToolTip("Draw a polygon to select points and assign new ITC values")
         self.polygon_selection_active = False
         selection_grid.addWidget(self.draw_polygon_button, 0, 0)
+
+        self.radius_value_input = QDoubleSpinBox()
+        self.radius_value_input.setMinimum(0.05)
+        self.radius_value_input.setMaximum(100.0)
+        self.radius_value_input.setSingleStep(0.1)
+        self.radius_value_input.setDecimals(2)
+        self.radius_value_input.setValue(1.0)
+        self.radius_value_input.setSuffix(" m")
+        self.radius_value_input.setFixedWidth(80)
+        self.radius_value_input.setFixedHeight(26)
+        self.radius_value_input.setStyleSheet("font-size: 9px;")
+        self.radius_value_input.setToolTip("Radius around the picked point used to select nearby points")
+        selection_grid.addWidget(self.radius_value_input, 0, 1)
+
+        self.radius_export_button = ModernButton("Pick & Export Radius")
+        self.radius_export_button.clicked.connect(self.on_radius_export_button_clicked)
+        self.radius_export_button.setEnabled(False)
+        self.radius_export_button.setFixedHeight(28)
+        self.radius_export_button.setStyleSheet("QPushButton { font-size: 10px; padding: 2px 6px; }")
+        self.radius_export_button.setToolTip("Pick a point in the 3D view, select points within the radius, and export them to a tree folder")
+        selection_grid.addWidget(self.radius_export_button, 0, 2)
         
         self.select_all_points_button = ModernButton("Select All")
         self.select_all_points_button.clicked.connect(self.select_all_points)
@@ -1213,7 +1236,7 @@ class TreeVisualizerGUI(QMainWindow):
         self.select_all_points_button.setFixedHeight(28)
         self.select_all_points_button.setStyleSheet("QPushButton { font-size: 10px; padding: 2px 6px; }")
         self.select_all_points_button.setToolTip("Select all points in the current visualization without drawing")
-        selection_grid.addWidget(self.select_all_points_button, 0, 1)
+        selection_grid.addWidget(self.select_all_points_button, 1, 0)
         
         self.assign_itc_button = ModernButton("Assign ITC")
         self.assign_itc_button.clicked.connect(lambda: self.assign_itc_to_selection())
@@ -1221,7 +1244,11 @@ class TreeVisualizerGUI(QMainWindow):
         self.assign_itc_button.setFixedHeight(28)
         self.assign_itc_button.setStyleSheet("QPushButton { font-size: 10px; padding: 2px 6px; }")
         self.assign_itc_button.setToolTip("Assign new ITC value to selected points")
-        selection_grid.addWidget(self.assign_itc_button, 0, 2)
+        selection_grid.addWidget(self.assign_itc_button, 1, 1)
+
+        radius_hint = QLabel("Radius selection exports immediately after one point pick.")
+        radius_hint.setStyleSheet("color: #bbbbbb; font-size: 9px;")
+        selection_grid.addWidget(radius_hint, 1, 2)
         
         button_layout.addLayout(selection_grid)
 
@@ -1700,6 +1727,7 @@ class TreeVisualizerGUI(QMainWindow):
             self.crown_polygon_button.setEnabled(True)  # Always enabled since it doesn't require stemcls
             self.view_neighbors_button.setEnabled(True)
             self.draw_polygon_button.setEnabled(True)
+            self.radius_export_button.setEnabled(True)
             self.save_button.setEnabled(True)
             self.fit_to_screen_button.setEnabled(True)
 
@@ -1934,6 +1962,13 @@ class TreeVisualizerGUI(QMainWindow):
             except Exception:
                 pass
             try:
+                self.radius_selection_active = False
+                self.radius_selection_center = None
+                if hasattr(self, 'radius_export_button'):
+                    self.radius_export_button.setText("Pick & Export Radius")
+            except Exception:
+                pass
+            try:
                 self.branch_assignment = None
             except Exception:
                 pass
@@ -2071,6 +2106,7 @@ class TreeVisualizerGUI(QMainWindow):
             # Enable polygon selection buttons
             self.draw_polygon_button.setEnabled(True)
             self.select_all_points_button.setEnabled(True)
+            self.radius_export_button.setEnabled(True)
 
             # Check volume folder for existing volume data if enabled (after visualization is complete)
             if (hasattr(self, 'volume_folder_checkbox') and 
@@ -2173,6 +2209,13 @@ class TreeVisualizerGUI(QMainWindow):
             except Exception:
                 pass
             try:
+                self.radius_selection_active = False
+                self.radius_selection_center = None
+                if hasattr(self, 'radius_export_button'):
+                    self.radius_export_button.setText("Pick & Export Radius")
+            except Exception:
+                pass
+            try:
                 self.branch_assignment = None
             except Exception:
                 pass
@@ -2209,6 +2252,7 @@ class TreeVisualizerGUI(QMainWindow):
             # Enable polygon selection buttons
             self.draw_polygon_button.setEnabled(True)
             self.select_all_points_button.setEnabled(True)
+            self.radius_export_button.setEnabled(True)
 
             # Reset any prior selection/analysis state to avoid index mismatches
             try:
@@ -2875,51 +2919,6 @@ class TreeVisualizerGUI(QMainWindow):
         centroid = np.mean(points, axis=0)
         return centroid[:2]  # Return only X, Y coordinates
 
-    def on_point_picked(self, picked_info):
-        """Callback for point picking - shows ITC value and trunk ID of picked point."""
-        if self.current_tree_points is None or self.current_itc_values is None:
-            self.log_to_console("Warning: No tree data available for point picking")
-            return
-
-        try:
-            # Get the picked point index
-            if hasattr(picked_info, 'point_index'):
-                point_index = picked_info.point_index
-            elif isinstance(picked_info, dict) and 'point_index' in picked_info:
-                point_index = picked_info['point_index']
-            else:
-                # Fallback: find closest point
-                picked_point = picked_info
-                if hasattr(picked_info, 'points'):
-                    picked_point = picked_info.points[0]
-                
-                # Find closest point in current visualization
-                distances = np.sum((self.current_tree_points - picked_point)**2, axis=1)
-                point_index = np.argmin(distances)
-
-            if point_index < len(self.current_itc_values):
-                itc_value = self.current_itc_values[point_index]
-                point_coords = self.current_tree_points[point_index]
-                
-                # Build message with ITC and optional trunk ID
-                message = f"Point picked - ITC: {itc_value}, Coordinates: ({point_coords[0]:.2f}, {point_coords[1]:.2f}, {point_coords[2]:.2f})"
-                
-                # Add trunk ID if trunk assignment is available
-                if hasattr(self, 'trunk_assignment') and self.trunk_assignment is not None:
-                    if point_index < len(self.trunk_assignment):
-                        trunk_id = self.trunk_assignment[point_index]
-                        if trunk_id >= 0:
-                            message += f" | Trunk: {trunk_id}"
-                        else:
-                            message += " | Trunk: NOISE"
-                
-                self.log_to_console(message)
-            else:
-                self.log_to_console("Warning: Point index out of range")
-
-        except Exception as e:
-            self.log_to_console(f"Error in point picking: {str(e)}")
-
     def select_all_trees(self):
         """Select all trees in the list."""
         for i in range(self.tree_list.count()):
@@ -2946,6 +2945,225 @@ class TreeVisualizerGUI(QMainWindow):
             self.cancel_polygon_selection()
         else:
             self.start_polygon_selection()
+
+    def on_radius_export_button_clicked(self):
+        """Toggle radius-based point picking and export mode."""
+        if self.radius_selection_active:
+            self.cancel_radius_selection()
+        else:
+            self.start_radius_selection()
+
+    def start_radius_selection(self):
+        """Start radius-based point selection mode."""
+        if self.las_data is None:
+            QMessageBox.warning(self, "Warning", "No LAS file loaded.")
+            return
+
+        if self.current_tree_points is None or len(self.current_tree_points) == 0:
+            QMessageBox.warning(self, "Warning", "No tree points available for selection.")
+            return
+
+        if not self.plotter:
+            QMessageBox.warning(self, "Warning", "3D viewer not initialized.")
+            return
+
+        self.radius_selection_active = True
+        self.radius_selection_center = None
+        self.radius_export_button.setText("Cancel Radius")
+        radius_value = float(self.radius_value_input.value())
+        self.log_to_console(
+            f"Radius export mode enabled. Click a point in the 3D view to select points within {radius_value:.2f} m and export them."
+        )
+
+    def cancel_radius_selection(self, log_message=True):
+        """Cancel radius-based point selection mode."""
+        self.radius_selection_active = False
+        self.radius_selection_center = None
+        if hasattr(self, 'radius_export_button'):
+            self.radius_export_button.setText("Pick & Export Radius")
+        if log_message:
+            self.log_to_console("Radius export mode cancelled.")
+
+    def _resolve_picked_point(self, picked_info):
+        """Resolve the picked point index and coordinates from a PyVista pick callback payload."""
+        if self.current_tree_points is None or len(self.current_tree_points) == 0:
+            return None, None
+
+        point_index = None
+
+        if hasattr(picked_info, 'point_index'):
+            point_index = picked_info.point_index
+        elif isinstance(picked_info, dict) and 'point_index' in picked_info:
+            point_index = picked_info['point_index']
+        else:
+            picked_point = picked_info
+            if hasattr(picked_info, 'points'):
+                picked_point = picked_info.points[0]
+
+            if picked_point is not None:
+                picked_point = np.asarray(picked_point, dtype=float)
+                if picked_point.shape[0] >= 3:
+                    distances = np.sum((self.current_tree_points - picked_point[:3]) ** 2, axis=1)
+                    point_index = int(np.argmin(distances))
+
+        if point_index is None:
+            return None, None
+
+        try:
+            point_index = int(point_index)
+        except (TypeError, ValueError):
+            return None, None
+
+        if point_index < 0 or point_index >= len(self.current_tree_points):
+            return None, None
+
+        return point_index, self.current_tree_points[point_index]
+
+    def _resolve_current_visualization_global_indices(self):
+        """Map the current visualization back to original LAS indices."""
+        if self.las_data is None:
+            return None
+
+        if self.all_masks is not None and len(self.all_masks) > 0:
+            try:
+                per_mask_indices = [np.where(mask)[0] for mask in self.all_masks]
+                if per_mask_indices:
+                    return np.concatenate(per_mask_indices)
+            except Exception:
+                pass
+
+        if self.current_mask is not None:
+            try:
+                return np.where(self.current_mask)[0]
+            except Exception:
+                return None
+
+        return None
+
+    def _sanitize_filename_part(self, value):
+        """Convert a tree identifier into a filesystem-friendly filename fragment."""
+        import re
+
+        text = str(value) if value is not None else "tree"
+        text = re.sub(r"[^A-Za-z0-9._-]+", "_", text).strip("_")
+        return text or "tree"
+
+    def _select_points_with_radius(self, picked_point_coords):
+        """Select points within the configured radius around the picked point."""
+        if self.current_tree_points is None or len(self.current_tree_points) == 0:
+            raise ValueError("No tree points available for radius selection")
+
+        radius_value = float(self.radius_value_input.value())
+        center_point = np.asarray(picked_point_coords, dtype=float)
+        if center_point.shape[0] < 2:
+            raise ValueError("Invalid picked point coordinates")
+
+        self.radius_selection_center = center_point[:3]
+        xy_offsets = self.current_tree_points[:, :2] - center_point[:2]
+        distances = np.sqrt(np.sum(xy_offsets ** 2, axis=1))
+        selected_indices = np.where(distances <= radius_value)[0]
+
+        if len(selected_indices) == 0:
+            raise ValueError(f"No points found within {radius_value:.2f} m of the picked point")
+
+        self.selected_point_indices = selected_indices
+        self.selected_polygon = None
+        self.visualize_selected_points()
+        self.log_to_console(
+            f"Selected {len(selected_indices)} points within {radius_value:.2f} m of ({center_point[0]:.2f}, {center_point[1]:.2f}, {center_point[2]:.2f})."
+        )
+
+        self._export_selected_radius_points(radius_value)
+
+    def _export_selected_radius_points(self, radius_value):
+        """Export the currently selected radius points to a tree-specific LAS file."""
+        if self.las_data is None:
+            raise ValueError("No LAS data available for export")
+
+        if self.selected_point_indices is None or len(self.selected_point_indices) == 0:
+            raise ValueError("No radius-selected points available for export")
+
+        global_indices = self._resolve_current_visualization_global_indices()
+        if global_indices is None or len(global_indices) == 0:
+            raise ValueError("Could not determine original LAS indices for the current visualization")
+
+        if np.max(self.selected_point_indices) >= len(global_indices):
+            raise ValueError("Selection indices exceed the available LAS index mapping")
+
+        original_indices = global_indices[self.selected_point_indices]
+        if len(original_indices) == 0:
+            raise ValueError("No original LAS indices resolved for export")
+
+        import copy
+
+        if getattr(self, 'current_las_path', None):
+            las_dir = os.path.dirname(self.current_las_path)
+            las_basename = os.path.splitext(os.path.basename(self.current_las_path))[0]
+        else:
+            las_dir = os.getcwd()
+            las_basename = "tree_export"
+
+        safe_tree_id = self._sanitize_filename_part(self.current_tree_id if self.current_tree_id is not None else "tree")
+        radius_token = f"{radius_value:.2f}".replace('.', 'p')
+
+        export_dir = os.path.join(las_dir, "tree", las_basename, f"tree_{safe_tree_id}")
+        os.makedirs(export_dir, exist_ok=True)
+
+        output_path = os.path.join(export_dir, f"tree_{safe_tree_id}_radius_{radius_token}m.las")
+
+        subset_points = self.las_data.points[original_indices].copy()
+        header = copy.deepcopy(self.las_data.header)
+        export_las = laspy.LasData(header)
+        export_las.points = subset_points
+        export_las.write(output_path)
+
+        self.log_to_console(
+            f"💾 Exported {len(original_indices)} points to {output_path}"
+        )
+        self.log_to_console(
+            f"📁 Tree folder: {export_dir}"
+        )
+
+    def on_point_picked(self, picked_info):
+        """Callback for point picking - shows ITC value and trunk ID of picked point."""
+        if self.current_tree_points is None or self.current_itc_values is None:
+            self.log_to_console("Warning: No tree data available for point picking")
+            return
+
+        try:
+            point_index, point_coords = self._resolve_picked_point(picked_info)
+            if point_index is None or point_coords is None:
+                self.log_to_console("Warning: Could not resolve picked point")
+                return
+
+            if self.radius_selection_active:
+                try:
+                    self._select_points_with_radius(point_coords)
+                except Exception as radius_error:
+                    self.log_to_console(f"Error in radius export selection: {str(radius_error)}")
+                    QMessageBox.warning(self, "Radius Selection Error", str(radius_error))
+                finally:
+                    self.cancel_radius_selection(log_message=False)
+                return
+
+            if point_index < len(self.current_itc_values):
+                itc_value = self.current_itc_values[point_index]
+                message = f"Point picked - ITC: {itc_value}, Coordinates: ({point_coords[0]:.2f}, {point_coords[1]:.2f}, {point_coords[2]:.2f})"
+
+                if hasattr(self, 'trunk_assignment') and self.trunk_assignment is not None:
+                    if point_index < len(self.trunk_assignment):
+                        trunk_id = self.trunk_assignment[point_index]
+                        if trunk_id >= 0:
+                            message += f" | Trunk: {trunk_id}"
+                        else:
+                            message += " | Trunk: NOISE"
+
+                self.log_to_console(message)
+            else:
+                self.log_to_console("Warning: Point index out of range")
+
+        except Exception as e:
+            self.log_to_console(f"Error in point picking: {str(e)}")
 
     def start_polygon_selection(self):
         """Start polygon selection mode for manual point cloud segmentation."""
