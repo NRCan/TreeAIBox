@@ -2,7 +2,7 @@
   "title": "treefilter",
   "model": {
     "type": "SegFormer",
-	"num_classes": 2,
+    "num_classes": 2,
     "voxel_number_in_block": [128,128,128],
     "voxel_resolution_in_meter": [0.12,0.12,0.12],
     "attribute_list": [0],

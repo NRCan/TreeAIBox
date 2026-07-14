@@ -2,7 +2,7 @@
   "title": "urbanfilter",
   "model": {
     "type": "SegFormer",
-	"num_classes": 7,
+    "num_classes": 7,
     "voxel_number_in_block": [112,112,256],
     "voxel_resolution_in_meter": [0.3,0.3,0.2],
     "attribute_list": [0],
