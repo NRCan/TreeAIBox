@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QPushButton, QListWidget, QListWidgetItem, QLineEdit, QLabel, QFileDialog,
     QMessageBox, QProgressBar, QSplitter, QFrame, QComboBox, QCheckBox,
-    QGroupBox, QScrollArea, QTextEdit, QDialog, QButtonGroup, QRadioButton, QSpinBox, QDoubleSpinBox
+    QGroupBox, QScrollArea, QTextEdit, QDialog, QButtonGroup, QRadioButton, QSpinBox, QDoubleSpinBox, QSlider
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QPalette, QColor
@@ -597,6 +597,250 @@ class BatchBranchParamsDialog(QDialog):
         }
 
 
+
+class GdbImportDialog(QDialog):
+    """Dialog for importing points from an ESRI File Geodatabase (.gdb) to view in 3D space."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.gdb_path = None
+        self.selected_layer = None
+        self.z_field = None
+        self.z_constant = 0.0
+        self.color = "#FF3333"
+        self.point_size = 8
+        self.render_spheres = True
+        self._layer_schema = {}
+        self.init_ui()
+
+    def init_ui(self):
+        self.setWindowTitle("Import Points from Geodatabase")
+        self.setModal(True)
+        self.setMinimumWidth(500)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        title = QLabel("Import & View Point Features from Geodatabase (.gdb)")
+        title.setStyleSheet("font-weight: bold; font-size: 13px; color: #4CAF50; margin-bottom: 4px;")
+        title.setWordWrap(True)
+        layout.addWidget(title)
+
+        gdb_group = QGroupBox("Geodatabase")
+        gdb_layout = QHBoxLayout(gdb_group)
+        self.gdb_path_label = QLabel("No geodatabase selected")
+        self.gdb_path_label.setStyleSheet("color: #bbbbbb;")
+        self.gdb_path_label.setWordWrap(True)
+        gdb_layout.addWidget(self.gdb_path_label, 1)
+        browse_btn = QPushButton("Browse…")
+        browse_btn.setFixedWidth(90)
+        browse_btn.clicked.connect(self._browse_gdb)
+        gdb_layout.addWidget(browse_btn)
+        layout.addWidget(gdb_group)
+
+        layer_group = QGroupBox("Feature Layer")
+        layer_layout = QVBoxLayout(layer_group)
+        self.layer_combo = QComboBox()
+        self.layer_combo.setEnabled(False)
+        self.layer_combo.addItem("<Select a geodatabase first>")
+        self.layer_combo.currentTextChanged.connect(self._on_layer_changed)
+        layer_layout.addWidget(self.layer_combo)
+        self.layer_info_label = QLabel("")
+        self.layer_info_label.setStyleSheet("color: #bbbbbb; font-size: 10px;")
+        layer_layout.addWidget(self.layer_info_label)
+        layout.addWidget(layer_group)
+
+        z_group = QGroupBox("Z Elevation")
+        z_layout = QGridLayout(z_group)
+        z_layout.setSpacing(8)
+        z_layout.addWidget(QLabel("Z elevation field:"), 0, 0)
+        self.z_field_combo = QComboBox()
+        self.z_field_combo.setEnabled(False)
+        self.z_field_combo.setToolTip(
+            "Attribute column containing Z elevation (metres).\n"
+            "<Use geometry Z / constant> reads Z from feature geometry if present."
+        )
+        self.z_field_combo.currentTextChanged.connect(self._on_z_field_changed)
+        z_layout.addWidget(self.z_field_combo, 0, 1)
+        self.z_const_label = QLabel("Constant Z value (m):")
+        self.z_const_label.setStyleSheet("color: #bbbbbb; font-size: 10px;")
+        z_layout.addWidget(self.z_const_label, 1, 0)
+        self.z_const_spin = QDoubleSpinBox()
+        self.z_const_spin.setRange(-9999.0, 99999.0)
+        self.z_const_spin.setDecimals(3)
+        self.z_const_spin.setValue(0.0)
+        self.z_const_spin.setFixedWidth(110)
+        self.z_const_spin.setToolTip("Fallback height if features lack 3D Z coordinates.")
+        z_layout.addWidget(self.z_const_spin, 1, 1)
+        layout.addWidget(z_group)
+
+        style_group = QGroupBox("3D Display Settings")
+        style_layout = QGridLayout(style_group)
+        style_layout.setSpacing(8)
+        style_layout.addWidget(QLabel("Marker Color:"), 0, 0)
+        self.color_combo = QComboBox()
+        self.colors_map = {
+            "Red": "#FF3333", "Yellow": "#FFDD33", "Cyan": "#33DDFF",
+            "Magenta": "#FF33FF", "Lime Green": "#33FF57",
+            "Bright Orange": "#FF8C00", "White": "#FFFFFF", "Blue": "#3366FF"
+        }
+        for name in self.colors_map:
+            self.color_combo.addItem(name)
+        style_layout.addWidget(self.color_combo, 0, 1)
+        style_layout.addWidget(QLabel("Point Size / Radius:"), 1, 0)
+        self.size_spin = QSpinBox()
+        self.size_spin.setRange(1, 50)
+        self.size_spin.setValue(8)
+        style_layout.addWidget(self.size_spin, 1, 1)
+        self.spheres_cb = QCheckBox("Render as 3D Spheres")
+        self.spheres_cb.setChecked(True)
+        style_layout.addWidget(self.spheres_cb, 2, 0, 1, 2)
+        layout.addWidget(style_group)
+
+        note = QLabel("\u2139\ufe0f  Requires: pyogrio and geopandas  (pip install pyogrio geopandas)")
+        note.setStyleSheet("color: #888888; font-size: 10px;")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+
+        btn_layout = QHBoxLayout()
+        self.ok_btn = QPushButton("Display in 3D")
+        self.ok_btn.setEnabled(False)
+        self.ok_btn.clicked.connect(self._on_ok)
+        btn_layout.addWidget(self.ok_btn)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+
+    def _browse_gdb(self):
+        path = QFileDialog.getExistingDirectory(
+            self, "Select ESRI File Geodatabase (.gdb folder)", "",
+            QFileDialog.Option.ShowDirsOnly
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".gdb"):
+            QMessageBox.warning(self, "Not a Geodatabase",
+                                f"Please select a folder with the .gdb extension.\n\nSelected: {path}")
+            return
+        self.gdb_path = path
+        self.gdb_path_label.setText(path)
+        self.gdb_path_label.setStyleSheet("color: #e0e0e0;")
+        self._populate_layers()
+
+    def _populate_layers(self):
+        has_pyogrio = False
+        has_fiona = False
+        try:
+            import pyogrio; has_pyogrio = True
+        except ImportError:
+            pass
+        try:
+            import fiona; has_fiona = True
+        except ImportError:
+            pass
+        if not has_pyogrio and not has_fiona:
+            QMessageBox.critical(self, "Missing Dependency",
+                "pyogrio or fiona is required.\n\npip install pyogrio geopandas")
+            return
+        point_layers = []
+        if has_pyogrio:
+            try:
+                import pyogrio
+                for lyr, gtype in pyogrio.list_layers(self.gdb_path):
+                    if gtype and "point" in str(gtype).lower():
+                        point_layers.append(lyr)
+            except Exception as exc:
+                QMessageBox.critical(self, "Error", f"Could not list layers:\n{exc}"); return
+        else:
+            try:
+                import fiona
+                for lyr in fiona.listlayers(self.gdb_path):
+                    try:
+                        with fiona.open(self.gdb_path, layer=lyr) as src:
+                            if "point" in src.schema.get("geometry","").lower():
+                                point_layers.append(lyr)
+                    except Exception:
+                        pass
+            except Exception as exc:
+                QMessageBox.critical(self, "Error", f"Could not list layers:\n{exc}"); return
+        self.layer_combo.clear()
+        if not point_layers:
+            self.layer_combo.addItem("<No Point layers found>")
+            self.layer_combo.setEnabled(False)
+            self.layer_info_label.setText("No Point layers found in this GDB.")
+            return
+        self.layer_combo.addItem("<Select layer>")
+        for lyr in point_layers:
+            self.layer_combo.addItem(lyr)
+        self.layer_combo.setEnabled(True)
+
+    def _on_layer_changed(self, layer_name):
+        if not self.gdb_path or not layer_name or layer_name.startswith("<"):
+            self.ok_btn.setEnabled(False); return
+        try:
+            import pyogrio
+            info = pyogrio.read_info(self.gdb_path, layer=layer_name)
+            gtype = info.get("geometry_type","?")
+            n = info.get("features", 0)
+            fields = info.get("fields", [])
+            dtypes = info.get("dtypes", [])
+            self._layer_schema = dict(zip(fields, [str(d) for d in dtypes]))
+            self.layer_info_label.setText(f"Geometry: {gtype}  |  Features: {n:,}  |  Fields: {len(self._layer_schema)}")
+        except ImportError:
+            try:
+                import fiona
+                with fiona.open(self.gdb_path, layer=layer_name) as src:
+                    schema = src.schema
+                    self._layer_schema = schema.get("properties",{})
+                    self.layer_info_label.setText(
+                        f"Geometry: {schema.get('geometry','?')}  |  Features: {len(src):,}  |  Fields: {len(self._layer_schema)}")
+            except Exception as exc:
+                self.layer_info_label.setText(f"Error: {exc}")
+                self._layer_schema = {}; self.ok_btn.setEnabled(False); return
+        except Exception as exc:
+            self.layer_info_label.setText(f"Error: {exc}")
+            self._layer_schema = {}; self.ok_btn.setEnabled(False); return
+        self.z_field_combo.clear()
+        self.z_field_combo.addItem("<Use geometry Z / constant>")
+        for f, t in self._layer_schema.items():
+            if any(k in str(t).lower() for k in ("int","float","num")):
+                self.z_field_combo.addItem(f)
+        self.z_field_combo.setEnabled(True)
+        self.ok_btn.setEnabled(True)
+
+    def _on_z_field_changed(self, field_name):
+        use_const = field_name.startswith("<")
+        self.z_const_label.setStyleSheet(
+            "color: #e0e0e0; font-size: 10px;" if use_const else "color: #555555; font-size: 10px;"
+        )
+        self.z_const_spin.setEnabled(use_const)
+
+    def _on_ok(self):
+        if not self.gdb_path:
+            QMessageBox.warning(self, "No GDB", "Please select a geodatabase first."); return
+        layer_name = self.layer_combo.currentText()
+        if not layer_name or layer_name.startswith("<"):
+            QMessageBox.warning(self, "No Layer", "Please select a feature layer."); return
+        self.selected_layer = layer_name
+        z_txt = self.z_field_combo.currentText()
+        self.z_field = None if z_txt.startswith("<") else z_txt
+        self.z_constant = self.z_const_spin.value()
+        self.accept()
+
+    def get_import_params(self):
+        color_name = self.color_combo.currentText()
+        return {
+            "gdb_path": self.gdb_path,
+            "layer": self.selected_layer,
+            "z_field": self.z_field,
+            "z_constant": self.z_constant,
+            "color": self.colors_map.get(color_name, "#FF3333"),
+            "color_name": color_name,
+            "point_size": self.size_spin.value(),
+            "render_spheres": self.spheres_cb.isChecked(),
+        }
+
+
 class TreeVisualizerGUI(QMainWindow):
     """Main window for tree visualization GUI."""
 
@@ -619,6 +863,8 @@ class TreeVisualizerGUI(QMainWindow):
         self.current_itc_values = None
         self.current_itc_values = None
         self.plotter = None
+        # GDB overlay layers: name -> {coords, color, point_size, visible, render_spheres}
+        self.gdb_layers = {}
         # Polygon selection variables
         self.polygon_selection_mode = False
         self.polygon_points = []
@@ -817,6 +1063,27 @@ class TreeVisualizerGUI(QMainWindow):
                 background-color: #4CAF50;
                 border-radius: 4px;
             }
+            QSlider::groove:horizontal {
+                height: 4px;
+                background: #404040;
+                border-radius: 2px;
+            }
+            QSlider::sub-page:horizontal {
+                background: #4CAF50;
+                border-radius: 2px;
+            }
+            QSlider::handle:horizontal {
+                background: #e0e0e0;
+                border: 2px solid #4CAF50;
+                width: 14px;
+                height: 14px;
+                margin: -5px 0;
+                border-radius: 7px;
+            }
+            QSlider::handle:horizontal:hover {
+                background: #ffffff;
+                border-color: #66BB6A;
+            }
         """)
 
     def init_ui(self):
@@ -900,8 +1167,8 @@ class TreeVisualizerGUI(QMainWindow):
         self.plotter.enable_point_picking(callback=self.on_point_picked, show_message=False)
         
         # Add instruction text
-        self.plotter.add_text("Click on points to see ITC values", position='upper_right', 
-                            font_size=10, color='#FFFFFF')
+        self.plotter.add_text("Click on points to see ITC values", position='lower_left', 
+                            font_size=10, color='#FFFFFF', name='itc_instruction_text')
         print(f"[UI] {time.strftime('%H:%M:%S')} - Plotter setup complete ({time.perf_counter() - plotter_start:.3f}s)")
 
         top_layout.addWidget(plotter_frame, 4)
@@ -998,7 +1265,46 @@ class TreeVisualizerGUI(QMainWindow):
         self.load_button.clicked.connect(self.load_las_file)
         file_layout.addWidget(self.load_button)
 
+        self.import_gdb_button = ModernButton("Import Points from GDB")
+        self.import_gdb_button.clicked.connect(self.import_points_from_gdb)
+        self.import_gdb_button.setToolTip(
+            "Import point features from a .gdb geodatabase and view them in 3D.\n"
+            "Requires: pyogrio + geopandas  (pip install pyogrio geopandas)"
+        )
+        self.import_gdb_button.setStyleSheet("""
+            QPushButton {
+                background-color: #1976D2; border: none; color: white;
+                padding: 8px 16px; font-size: 11px; border-radius: 4px;
+            }
+            QPushButton:hover { background-color: #1565C0; }
+            QPushButton:pressed { background-color: #0D47A1; }
+        """)
+        file_layout.addWidget(self.import_gdb_button)
+
         layout.addWidget(file_group)
+
+        # ── GDB Layer Manager ─────────────────────────────────────────
+        self.gdb_layer_group = QGroupBox("GDB Layer Manager")
+        self.gdb_layer_group.setVisible(False)
+        gdb_layer_vbox = QVBoxLayout(self.gdb_layer_group)
+        gdb_layer_vbox.setSpacing(6)
+        gdb_layer_vbox.setContentsMargins(8, 14, 8, 8)
+
+        self.gdb_layers_scroll = QScrollArea()
+        self.gdb_layers_scroll.setWidgetResizable(True)
+        self.gdb_layers_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.gdb_layers_scroll.setMinimumHeight(240)
+        self.gdb_layers_scroll.setMaximumHeight(350)
+        self.gdb_layers_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        self.gdb_layers_container = QWidget()
+        self.gdb_layers_container_layout = QVBoxLayout(self.gdb_layers_container)
+        self.gdb_layers_container_layout.setSpacing(4)
+        self.gdb_layers_container_layout.setContentsMargins(0, 0, 0, 0)
+        self.gdb_layers_container_layout.addStretch()
+        self.gdb_layers_scroll.setWidget(self.gdb_layers_container)
+        gdb_layer_vbox.addWidget(self.gdb_layers_scroll)
+
+        layout.addWidget(self.gdb_layer_group)
 
         # Volume folder management section
         volume_group = QGroupBox("Volume Folder Management")
@@ -1744,22 +2050,330 @@ class TreeVisualizerGUI(QMainWindow):
         finally:
             self.progress_bar.setVisible(False)
 
-    def update_tree_colors(self, color_field):
+    # ------------------------------------------------------------------
+    # GDB Import & 3D Overlay
+    # ------------------------------------------------------------------
+    def import_points_from_gdb(self):
+        """Open GDB import dialog and render features in 3D. No LAS file required."""
+        dlg = GdbImportDialog(self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        params = dlg.get_import_params()
+        gdb_path       = params["gdb_path"]
+        layer_name     = params["layer"]
+        z_field        = params["z_field"]
+        z_constant     = params["z_constant"]
+        color          = params["color"]
+        color_name     = params["color_name"]
+        point_size     = params["point_size"]
+        render_spheres = params["render_spheres"]
+
+        try:
+            import geopandas as gpd
+        except ImportError:
+            QMessageBox.critical(self, "Missing Dependency",
+                "geopandas is required.\n\npip install pyogrio geopandas"); return
+
+        try:
+            import pyogrio  # noqa
+        except ImportError:
+            try:
+                import fiona  # noqa
+            except ImportError:
+                QMessageBox.critical(self, "Missing Dependency",
+                    "pyogrio or fiona is required.\n\npip install pyogrio geopandas"); return
+
+        if not self.plotter:
+            QMessageBox.warning(self, "Warning", "3D viewer not initialized."); return
+
+        self.log_to_console(f"\U0001f4c2 Reading GDB layer: {layer_name} from {os.path.basename(gdb_path)}")
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setRange(0, 0)
+        QApplication.processEvents()
+
+        try:
+            gdf = gpd.read_file(gdb_path, layer=layer_name)
+        except Exception as exc:
+            self.progress_bar.setVisible(False)
+            QMessageBox.critical(self, "Read Error", f"Failed to read layer:\n{exc}"); return
+
+        if gdf.empty:
+            self.progress_bar.setVisible(False)
+            QMessageBox.warning(self, "Empty Layer", f"Layer '{layer_name}' has no features."); return
+
+        n_features = len(gdf)
+        self.log_to_console(f"\U0001f4ca GDB layer read: {n_features:,} features")
+
+        try:
+            xs = gdf.geometry.x.to_numpy(dtype=float)
+            ys = gdf.geometry.y.to_numpy(dtype=float)
+            if z_field:
+                zs = gdf[z_field].to_numpy(dtype=float)
+            else:
+                try:
+                    zs = gdf.geometry.z.to_numpy(dtype=float)
+                    if not np.all(np.isfinite(zs)):
+                        raise ValueError("Non-finite Z")
+                except Exception:
+                    zs = np.full(n_features, z_constant, dtype=float)
+                    self.log_to_console(f"\u2139\ufe0f  No geometry Z – using constant {z_constant:.3f} m")
+        except Exception as exc:
+            self.progress_bar.setVisible(False)
+            QMessageBox.critical(self, "Coordinate Error", f"Could not extract XYZ:\n{exc}"); return
+
+        try:
+            coords = np.column_stack([xs, ys, zs])
+            actor_name = f"gdb_layer_{layer_name}"
+            idx = 2
+            while actor_name in self.gdb_layers:
+                actor_name = f"gdb_layer_{layer_name}_{idx}"
+                idx += 1
+
+            self.gdb_layers[actor_name] = {
+                "coords": coords,
+                "color": color,
+                "color_name": color_name,
+                "point_size": point_size,
+                "render_spheres": render_spheres,
+                "visible": True,
+                "layer_name": layer_name,
+                "n_features": n_features,
+            }
+
+            self.plotter.add_points(
+                pv.PolyData(coords),
+                color=color,
+                point_size=point_size,
+                render_points_as_spheres=render_spheres,
+                name=actor_name
+            )
+            self.plotter.reset_camera()
+            self.plotter.update()
+
+            self._add_gdb_layer_row(actor_name)
+
+            self.log_to_console(
+                f"\u2705 Displayed {n_features:,} GDB points from \'{layer_name}\' ({color_name} markers)."
+            )
+            self.progress_bar.setVisible(False)
+            QMessageBox.information(
+                self, "Layer Rendered",
+                f"Displayed {n_features:,} GDB points from \'{layer_name}\' in 3D viewer!\n\n"
+                f"\u2022 Color: {color_name}\n"
+                f"\u2022 Marker Size: {point_size}\n"
+                f"\u2022 3D Spheres: {'Yes' if render_spheres else 'No'}\n\n"
+                "Manage visibility and size in the \'GDB Layer Manager\' panel."
+            )
+        except Exception as exc:
+            self.progress_bar.setVisible(False)
+            QMessageBox.critical(self, "Rendering Error", f"Could not render features:\n{exc}")
+        finally:
+            self.progress_bar.setVisible(False)
+
+    def _restore_gdb_layers(self):
+        """Re-render all visible GDB overlay layers after plotter.clear()."""
+        if not self.plotter:
+            return
+        for actor_name, layer in self.gdb_layers.items():
+            if not layer.get("visible", True):
+                continue
+            try:
+                self.plotter.add_points(
+                    pv.PolyData(layer["coords"]),
+                    color=layer["color"],
+                    point_size=layer["point_size"],
+                    render_points_as_spheres=layer["render_spheres"],
+                    name=actor_name,
+                    reset_camera=False
+                )
+            except Exception:
+                pass
+
+    def _add_gdb_layer_row(self, actor_name):
+        """Add a control row to the GDB Layer Manager sidebar panel."""
+        layer = self.gdb_layers[actor_name]
+
+        # Use a QFrame card matching the viewer theme
+        row = QFrame()
+        row.setObjectName(f"gdb_row_{actor_name}")
+        row_layout = QVBoxLayout(row)
+        row_layout.setContentsMargins(10, 10, 10, 10)
+        row_layout.setSpacing(10)
+        row.setStyleSheet("""
+            QFrame {
+                background-color: #2e2e2e;
+                border: 1px solid #444444;
+                border-radius: 6px;
+            }
+            QLabel {
+                border: none;
+                background: transparent;
+            }
+        """)
+
+        # Top line: checkbox + color dot + layer name + point count + remove button
+        top = QHBoxLayout()
+        top.setSpacing(6)
+
+        vis_cb = QCheckBox()
+        vis_cb.setChecked(True)
+        vis_cb.setToolTip("Toggle layer visibility in 3D view")
+
+        color_dot = QLabel("●")
+        color_dot.setStyleSheet(f"color: {layer['color']}; font-size: 14px; font-weight: bold;")
+
+        name_lbl = QLabel(layer["layer_name"])
+        name_lbl.setStyleSheet("color: #ffffff; font-size: 11px; font-weight: bold;")
+        name_lbl.setWordWrap(False)
+
+        feat_lbl = QLabel(f"{layer['n_features']:,} pts")
+        feat_lbl.setStyleSheet("color: #aaaaaa; font-size: 9px; background-color: #383838; padding: 2px 5px; border-radius: 3px;")
+
+        remove_btn = QPushButton("✕")
+        remove_btn.setFixedSize(20, 20)
+        remove_btn.setToolTip("Remove layer from 3D view")
+        remove_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3d2424;
+                color: #ff6666;
+                border: 1px solid #663333;
+                border-radius: 4px;
+                font-size: 10px;
+                font-weight: bold;
+                padding: 0px;
+            }
+            QPushButton:hover {
+                background-color: #5c2c2c;
+                color: #ff9999;
+                border-color: #884444;
+            }
+        """)
+        remove_btn.clicked.connect(lambda _, an=actor_name, r=row: self._remove_gdb_layer(an, r))
+
+        top.addWidget(vis_cb)
+        top.addWidget(color_dot)
+        top.addWidget(name_lbl, 1)
+        top.addWidget(feat_lbl)
+        top.addWidget(remove_btn)
+        row_layout.addLayout(top)
+
+        # Size slider line
+        size_row = QHBoxLayout()
+        size_row.setSpacing(6)
+        size_lbl = QLabel("Size:")
+        size_lbl.setStyleSheet("color: #bbbbbb; font-size: 10px;")
+        size_lbl.setFixedWidth(28)
+        size_slider = QSlider(Qt.Orientation.Horizontal)
+        size_slider.setMinimum(1)
+        size_slider.setMaximum(50)
+        size_slider.setValue(layer["point_size"])
+        size_slider.setToolTip("Adjust marker point / sphere size")
+
+        size_val_lbl = QLabel(str(layer["point_size"]))
+        size_val_lbl.setStyleSheet("color: #4CAF50; font-weight: bold; font-size: 10px; min-width: 18px;")
+
+        def on_size_change(val, an=actor_name, vl=size_val_lbl):
+            vl.setText(str(val))
+            self.gdb_layers[an]["point_size"] = val
+            if self.gdb_layers[an]["visible"] and self.plotter:
+                try:
+                    self.plotter.add_points(
+                        pv.PolyData(self.gdb_layers[an]["coords"]),
+                        color=self.gdb_layers[an]["color"],
+                        point_size=val,
+                        render_points_as_spheres=self.gdb_layers[an]["render_spheres"],
+                        name=an,
+                        reset_camera=False
+                    )
+                    self.plotter.update()
+                except Exception:
+                    pass
+
+        size_slider.valueChanged.connect(on_size_change)
+        size_row.addWidget(size_lbl)
+        size_row.addWidget(size_slider, 1)
+        size_row.addWidget(size_val_lbl)
+        row_layout.addLayout(size_row)
+
+        def on_vis_change(checked, an=actor_name):
+            self.gdb_layers[an]["visible"] = checked
+            if not self.plotter:
+                return
+            if checked:
+                try:
+                    li = self.gdb_layers[an]
+                    self.plotter.add_points(
+                        pv.PolyData(li["coords"]),
+                        color=li["color"],
+                        point_size=li["point_size"],
+                        render_points_as_spheres=li["render_spheres"],
+                        name=an,
+                        reset_camera=False
+                    )
+                    self.plotter.update()
+                except Exception:
+                    pass
+            else:
+                try:
+                    self.plotter.remove_actor(an)
+                    self.plotter.update()
+                except Exception:
+                    pass
+
+        vis_cb.stateChanged.connect(lambda state, an=actor_name: on_vis_change(state == 2, an))
+
+        count = self.gdb_layers_container_layout.count()
+        self.gdb_layers_container_layout.insertWidget(count - 1, row)
+        self.gdb_layer_group.setVisible(True)
+
+    def _remove_gdb_layer(self, actor_name, row_widget):
+        """Remove a GDB layer from the 3D view and the sidebar."""
+        if self.plotter:
+            try:
+                self.plotter.remove_actor(actor_name)
+                self.plotter.update()
+            except Exception:
+                pass
+        self.gdb_layers.pop(actor_name, None)
+        row_widget.setParent(None)
+        row_widget.deleteLater()
+        if not self.gdb_layers:
+            self.gdb_layer_group.setVisible(False)
+
+
+    def update_tree_colors(self, color_field, preserve_camera=True):
         """Update the coloring of the currently visualized tree."""
         if self.current_tree_points is None or self.current_tree_id is None or not self.plotter or not self.las_data or self.current_mask is None:
             print("Warning: No tree data available for coloring")
             return
 
+        # Save current camera state so recoloring preserves zoom & camera position
+        camera_state = None
+        if preserve_camera and self.plotter and hasattr(self.plotter, 'camera') and self.plotter.camera:
+            try:
+                camera_state = (
+                    self.plotter.camera.position,
+                    self.plotter.camera.focal_point,
+                    self.plotter.camera.up,
+                    self.plotter.camera.view_angle,
+                    self.plotter.camera.clipping_range
+                )
+            except Exception:
+                camera_state = None
+
         try:
             if color_field == "Default (green)":
                 # Use default green color
                 self.plotter.clear()
+                self._restore_gdb_layers()
                 point_cloud = pv.PolyData(self.current_tree_points)
-                self.plotter.add_points(point_cloud, color='#4CAF50', point_size=2, render_points_as_spheres=False)
+                self.plotter.add_points(point_cloud, color='#4CAF50', point_size=2, render_points_as_spheres=False, reset_camera=False)
             elif color_field == "RGB (red, green, blue)":
                 # Color by RGB values
                 print(f"Coloring by RGB values")
                 self.plotter.clear()
+                self._restore_gdb_layers()
                 
                 # Extract RGB values from the current tree points
                 available_fields = list(self.las_data.point_format.dimension_names)
@@ -1802,7 +2416,7 @@ class TreeVisualizerGUI(QMainWindow):
                     point_cloud['rgb'] = rgb_colors
                     
                     # Use direct RGB coloring (rgb=True uses the 'rgb' scalar field)
-                    self.plotter.add_points(point_cloud, scalars='rgb', rgb=True, point_size=2, render_points_as_spheres=False)
+                    self.plotter.add_points(point_cloud, scalars='rgb', rgb=True, point_size=2, render_points_as_spheres=False, reset_camera=False)
                     print(f"RGB coloring applied to {len(self.current_tree_points)} points")
                 else:
                     print(f"Warning: RGB fields not found. Available fields: {available_fields}")
@@ -1836,38 +2450,48 @@ class TreeVisualizerGUI(QMainWindow):
                         print(f"Coloring by field '{color_field}' with {len(color_values)} values, range: {np.min(color_values):.3f} - {np.max(color_values):.3f}")
 
                     self.plotter.clear()
+                    self._restore_gdb_layers()
                     point_cloud = pv.PolyData(self.current_tree_points)
                     
                     if color_field == 'itc':
                         # Use a colormap with 9 distinct colors for ITC
                         self.plotter.add_points(point_cloud, scalars=color_values, point_size=2, render_points_as_spheres=False, 
-                                              cmap='tab10', n_colors=9, clim=[0, 8])
+                                              cmap='tab10', n_colors=9, clim=[0, 8], reset_camera=False)
                     else:
-                        self.plotter.add_points(point_cloud, scalars=color_values, point_size=2, render_points_as_spheres=False, cmap='cividis')
+                        self.plotter.add_points(point_cloud, scalars=color_values, point_size=2, render_points_as_spheres=False, cmap='cividis', reset_camera=False)
                         
                 except Exception as e:
                     print(f"Error coloring by field '{color_field}': {str(e)}")
                     QMessageBox.warning(self, "Warning", f"Failed to color by field '{color_field}': {str(e)}")
                     return
 
-            # Reset camera and add title
-            self.plotter.reset_camera()
+            # Restore camera position and zoom level if preserving view, otherwise reset to frame tree
+            if preserve_camera and camera_state is not None:
+                try:
+                    self.plotter.camera.position = camera_state[0]
+                    self.plotter.camera.focal_point = camera_state[1]
+                    self.plotter.camera.up = camera_state[2]
+                    self.plotter.camera.view_angle = camera_state[3]
+                    self.plotter.camera.clipping_range = camera_state[4]
+                except Exception:
+                    self.plotter.reset_camera()
+            else:
+                self.plotter.reset_camera()
+
             num_points = len(self.current_tree_points)
             try:
                 self.plotter.remove_actor('tree_info_text')
+                self.plotter.remove_actor('itc_instruction_text')
             except Exception:
                 pass
 
             self.plotter.add_text(
-                f"Tree ID: {self.current_tree_id} ({num_points} points) - Color: {color_field}",
+                f"Click on points to see ITC values\nTree ID: {self.current_tree_id} ({num_points:,} points) - Color: {color_field}",
                 position='lower_left',
-                font_size=12,
+                font_size=11,
                 color='#FFFFFF',
                 name='tree_info_text'
             )
-            # Update instruction text
-            self.plotter.add_text("Click on points to see ITC values", position='upper_right', 
-                                font_size=10, color='#FFFFFF')
             # Print trunk/branch summary table to GUI console and python console
             try:
                 # Prefer trunk_volume_summary if present
@@ -2070,8 +2694,8 @@ class TreeVisualizerGUI(QMainWindow):
                 all_itc_values.append(itc_vals)
             self.current_itc_values = np.concatenate(all_itc_values)
 
-            # Visualize with current color field
-            self.update_tree_colors(color_field)
+            # Visualize with current color field (reset camera to frame tree)
+            self.update_tree_colors(color_field, preserve_camera=False)
 
             # Add bounding box visualization
             if len(merged_points) > 0:
@@ -2241,8 +2865,8 @@ class TreeVisualizerGUI(QMainWindow):
 
             # Switch to default green for trunk visualization
             self.color_combo.setCurrentText("Default (green)")
-            # Visualize with current color field
-            self.update_tree_colors(self.color_combo.currentText())
+            # Visualize with current color field (reset camera to frame tree)
+            self.update_tree_colors(self.color_combo.currentText(), preserve_camera=False)
 
             # Enable split detection button for merged trunks
             self.analyze_button.setEnabled(True)
@@ -2389,6 +3013,7 @@ class TreeVisualizerGUI(QMainWindow):
 
                 # Clear current view and show the polygon
                 self.plotter.clear()
+                self._restore_gdb_layers()
 
                 # Add the polygon as a filled mesh
                 self.plotter.add_mesh(polygon_mesh, color='green', opacity=0.3, show_edges=True, edge_color='darkgreen', line_width=2)
@@ -3746,6 +4371,7 @@ class TreeVisualizerGUI(QMainWindow):
         """Clear the 3D visualization and reset camera."""
         if self.plotter:
             self.plotter.clear()
+            self._restore_gdb_layers()
             self.plotter.reset_camera()
             self.plotter.update()
         
@@ -4130,6 +4756,7 @@ class TreeVisualizerGUI(QMainWindow):
 
         # Clear previous visualization
         self.plotter.clear()
+        self._restore_gdb_layers()
 
         try:
             itc_values = np.array(self.las_data['itc'])
@@ -5373,6 +6000,7 @@ class TreeVisualizerGUI(QMainWindow):
 
             # Clear current visualization
             self.plotter.clear()
+            self._restore_gdb_layers()
 
             # Show raw detections when requested, otherwise show filtered trunks.
             if show_raw and hasattr(self, 'raw_trunk_base_assignment'):
@@ -5817,6 +6445,7 @@ class TreeVisualizerGUI(QMainWindow):
             
             # Clear current visualization
             self.plotter.clear()
+            self._restore_gdb_layers()
             
             # Get unique branch IDs
             unique_branches = np.unique(self.branch_assignment)
@@ -8474,6 +9103,7 @@ Important:
 
         try:
             self.plotter.clear()
+            self._restore_gdb_layers()
 
             # Create point clouds for each component
             if len(components['trunk']) > 0:
@@ -8695,6 +9325,7 @@ Important:
         """
         # Clear existing plot
         self.plotter.clear()
+        self._restore_gdb_layers()
 
         # Color map for components
         colors = plt.cm.tab10(np.linspace(0, 1, len(components)))
@@ -8730,6 +9361,7 @@ Important:
         """
         # Clear existing plot
         self.plotter.clear()
+        self._restore_gdb_layers()
 
         trunk_points = components['trunk']
         branches = components['branches']

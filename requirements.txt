@@ -1,0 +1,29 @@
+# Core dependencies (tested with Python 3.14)
+numpy>=2.5.0
+pandas>=3.0.0
+scipy>=1.18.0
+scikit-learn>=1.9.0
+matplotlib>=3.11.0
+
+# LiDAR data processing
+laspy>=2.7.0
+
+# 3D visualization
+pyvista>=0.48.0
+pyvistaqt>=0.12.0
+
+# GUI framework
+PyQt6>=6.11.0
+PyQt6-WebEngine>=6.11.0
+# PyQt6.QtWebChannel is included with PyQt6, no separate package needed
+
+# Deep learning (used by TreeAIBox.py)
+torch>=2.13.0
+
+# HTTP requests
+requests>=2.34.0
+
+# ── Optional dependencies ──────────────────────────────
+# CloudCompare Python plugin (for CloudCompare integration)
+# pycc
+# cccorelib
