@@ -1586,7 +1586,7 @@ class TreeVisualizerGUI(QMainWindow):
         self.load_volume_button.setEnabled(True)
         self.load_volume_button.setFixedHeight(28)
         self.load_volume_button.setStyleSheet("QPushButton { font-size: 10px; padding: 2px 6px; }")
-        self.load_volume_button.setToolTip("Load volume calculation data from file")
+        self.load_volume_button.setToolTip("Load volume calculation data from file (only the selected tree(s) if any are selected, otherwise all files)")
         volume_data_grid.addWidget(self.load_volume_button, 0, 1)
 
         self.clear_volume_button = ModernButton("Clear Results")
@@ -5656,7 +5656,7 @@ class TreeVisualizerGUI(QMainWindow):
                 try:
                     import matplotlib.cm as cm
                     unique = np.unique(labs)
-                    colors = cm.get_cmap('tab20')(np.linspace(0, 1, max(2, len(unique))))
+                    colors = plt.get_cmap('tab20')(np.linspace(0, 1, max(2, len(unique))))
                     for i, uid in enumerate(unique):
                         mask = labs == uid
                         if uid == -1:
@@ -6018,11 +6018,11 @@ class TreeVisualizerGUI(QMainWindow):
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore", DeprecationWarning)
                     if num_raw <= 10:
-                        cmap = cm.get_cmap('tab10')
+                        cmap = plt.get_cmap('tab10')
                     elif num_raw <= 20:
-                        cmap = cm.get_cmap('tab20')
+                        cmap = plt.get_cmap('tab20')
                     else:
-                        cmap = cm.get_cmap('hsv')
+                        cmap = plt.get_cmap('hsv')
 
                 colors = cmap(np.linspace(0, 1, max(1, num_raw)))
 
@@ -6085,11 +6085,11 @@ class TreeVisualizerGUI(QMainWindow):
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore", DeprecationWarning)
                     if num_raw <= 10:
-                        cmap = cm.get_cmap('tab10')
+                        cmap = plt.get_cmap('tab10')
                     elif num_raw <= 20:
-                        cmap = cm.get_cmap('tab20')
+                        cmap = plt.get_cmap('tab20')
                     else:
-                        cmap = cm.get_cmap('hsv')
+                        cmap = plt.get_cmap('hsv')
 
                 colors = cmap(np.linspace(0, 1, max(1, num_raw)))
 
@@ -6135,11 +6135,11 @@ class TreeVisualizerGUI(QMainWindow):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", DeprecationWarning)
                 if num_trunks <= 10:
-                    cmap = cm.get_cmap('tab10')
+                    cmap = plt.get_cmap('tab10')
                 elif num_trunks <= 20:
-                    cmap = cm.get_cmap('tab20')
+                    cmap = plt.get_cmap('tab20')
                 else:
-                    cmap = cm.get_cmap('hsv')
+                    cmap = plt.get_cmap('hsv')
 
             colors = cmap(np.linspace(0, 1, num_trunks))
 
@@ -6460,14 +6460,14 @@ class TreeVisualizerGUI(QMainWindow):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", DeprecationWarning)
                 if num_branches <= 10:
-                    cmap = cm.get_cmap('tab10')
+                    cmap = plt.get_cmap('tab10')
                 elif num_branches <= 20:
-                    cmap = cm.get_cmap('tab20')
+                    cmap = plt.get_cmap('tab20')
                 else:
-                    cmap = cm.get_cmap('hsv')
-            
+                    cmap = plt.get_cmap('hsv')
+
             colors = cmap(np.linspace(0, 1, num_branches))
-            
+
             # Calculate branch statistics for console output
             self.log_to_console(f"\n📋 BRANCH DETAILS:")
             self.log_to_console(f"{'Branch ID':<12} {'Trunk':<8} {'Local':<8} {'Size':<8} {'Min Z':<8} {'Max Z':<8} {'Height':<8}")
@@ -8645,13 +8645,37 @@ Important:
                 self.volume_folder_label.setText(f"Volume Folder: {os.path.basename(folder)}")
 
             # Find all tree_*.json files in the folder
-            tree_files = sorted(glob.glob(os.path.join(folder, "tree_*.json")))
+            all_tree_files = sorted(glob.glob(os.path.join(folder, "tree_*.json")))
             
-            if not tree_files:
+            if not all_tree_files:
                 QMessageBox.warning(self, "No Tree Files", f"No tree_*.json files found in {folder}")
                 return
 
-            self.log_to_console(f"📂 Found {len(tree_files)} tree files in selected folder. Loading all files...")
+            # If specific tree(s) are selected in the tree list, load only their data
+            selected_tree_ids = self.get_selected_tree_ids()
+            if selected_tree_ids:
+                selected_ids_str = {str(tid) for tid in selected_tree_ids}
+                tree_files = []
+                for tree_file in all_tree_files:
+                    filename = os.path.basename(tree_file)
+                    file_tree_id = filename.replace('tree_', '').replace('.json', '')
+                    if file_tree_id in selected_ids_str:
+                        tree_files.append(tree_file)
+
+                if not tree_files:
+                    QMessageBox.warning(
+                        self, "No Data For Selected Tree(s)",
+                        f"No volume data files found for selected tree(s): {sorted(selected_tree_ids)}\n\n"
+                        f"Folder searched: {folder}")
+                    return
+
+                self.log_to_console(
+                    f"🎯 Loading volume data only for selected tree(s): {sorted(selected_tree_ids)} "
+                    f"({len(tree_files)} of {len(all_tree_files)} files in folder)")
+            else:
+                tree_files = all_tree_files
+                self.log_to_console(
+                    f"📂 No trees selected - found {len(tree_files)} tree files in folder. Loading all files...")
 
             # Clear existing volume data if any
             if self.accumulated_volume_sections:
@@ -8716,11 +8740,19 @@ Important:
                     self.log_to_console(f"⚠️ Error loading {tree_file}: {e}")
                     continue
 
-            # Track which trees have volume data for UI coloring
-            self.trees_with_volume_data = set(s['tree_id'] for s in self.accumulated_volume_sections)
+            # Track which trees have volume data for UI coloring.
+            # Base this on ALL files present in the folder (not just the loaded
+            # subset) so single-tree loads don't clear coloring for other trees.
+            folder_tree_ids = set()
+            for tree_file in all_tree_files:
+                filename = os.path.basename(tree_file)
+                folder_tree_ids.add(filename.replace('tree_', '').replace('.json', ''))
+            self.trees_with_volume_data = folder_tree_ids
             
             # DEBUG: Print summary of loaded trees
-            self.log_to_console(f"🔍 DEBUG: Found {len(self.trees_with_volume_data)} trees with volume data: {sorted(self.trees_with_volume_data)}")
+            loaded_tree_ids = sorted(set(s['tree_id'] for s in self.accumulated_volume_sections))
+            self.log_to_console(f"🔍 DEBUG: Loaded sections for {len(loaded_tree_ids)} tree(s): {loaded_tree_ids}")
+            self.log_to_console(f"🔍 DEBUG: Folder contains volume data for {len(self.trees_with_volume_data)} trees: {sorted(self.trees_with_volume_data)}")
             
             # Refresh tree list colors to show which trees have volume data
             self._refresh_tree_list_colors()
