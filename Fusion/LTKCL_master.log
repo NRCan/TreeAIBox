@@ -36431,3 +36431,91 @@ Clipped data file produced:
    D:/Enhanced Forest Inventory/Data/Plot_Polygon/Crossflight_Clip\clipped_to_polygon\clipped_Area#3_20251022_LLR_Crossed_MatchPasses.las    Jun 17, 2026 @ 12:18 AM
 Run finished: Wed Jun 17 12:18:52 2026 (elapsed time: 359 seconds)
 Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: "C:\Users\W0491597\Documents\Arun\TreeAIBox (2)\TreeAIBox\Fusion\PolyClipData.exe"  /verbose /shape:2,1 "D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon\Plot_Polygon.shp" "D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon\clipped_to_polygon\clipped_1_20250407_LLR_L2_AllPoints_Orthometric_crownoff.las" "D:/Enhanced Forest Inventory/Data/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric_crownoff.las"
+Run started: Tue Jul 14 13:12:20 2026
+   D:/Enhanced Forest Inventory/Data/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric_crownoff.las: 179706463 points
+   Clipping D:/Enhanced Forest Inventory/Data/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric_crownoff.las...556626 points out of 179706463 written to output file
+Clipped data file produced:
+   D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon\clipped_to_polygon\clipped_1_20250407_LLR_L2_AllPoints_Orthometric_crownoff.las    Jul 14, 2026 @ 1:13 PM
+Run finished: Tue Jul 14 13:13:23 2026 (elapsed time: 63 seconds)
+Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: "C:\Users\W0491597\Documents\Arun\TreeAIBox (2)\TreeAIBox\Fusion\PolyClipData.exe"  /verbose /shape:2,2 "D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon\Plot_Polygon.shp" "D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon\clipped_to_polygon\clipped_2_20250407_LLR_L2_AllPoints_Orthometric_crownoff.las" "D:/Enhanced Forest Inventory/Data/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric_crownoff.las"
+Run started: Tue Jul 14 13:13:23 2026
+   D:/Enhanced Forest Inventory/Data/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric_crownoff.las: 179706463 points
+   Clipping D:/Enhanced Forest Inventory/Data/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric_crownoff.las...850717 points out of 179706463 written to output file
+Clipped data file produced:
+   D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon\clipped_to_polygon\clipped_2_20250407_LLR_L2_AllPoints_Orthometric_crownoff.las    Jul 14, 2026 @ 1:15 PM
+Run finished: Tue Jul 14 13:15:11 2026 (elapsed time: 108 seconds)
+Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: "C:\Users\W0491597\Documents\Arun\TreeAIBox (2)\TreeAIBox\Fusion\PolyClipData.exe"  /verbose /shape:2,3 "D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon\Plot_Polygon.shp" "D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon\clipped_to_polygon\clipped_3_20250407_LLR_L2_AllPoints_Orthometric_crownoff.las" "D:/Enhanced Forest Inventory/Data/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric_crownoff.las"
+Run started: Tue Jul 14 13:15:11 2026
+   D:/Enhanced Forest Inventory/Data/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric_crownoff.las: 179706463 points
+   Clipping D:/Enhanced Forest Inventory/Data/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric_crownoff.las...1152551 points out of 179706463 written to output file
+Clipped data file produced:
+   D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon\clipped_to_polygon\clipped_3_20250407_LLR_L2_AllPoints_Orthometric_crownoff.las    Jul 14, 2026 @ 1:16 PM
+Run finished: Tue Jul 14 13:16:21 2026 (elapsed time: 70 seconds)
+Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: "C:\Users\W0491597\Documents\Arun\TreeAIBox (2)\TreeAIBox\Fusion\PolyClipData.exe"  /verbose /shape:2,4 "D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon\Plot_Polygon.shp" "D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon\clipped_to_polygon\clipped_4_20250407_LLR_L2_AllPoints_Orthometric_crownoff.las" "D:/Enhanced Forest Inventory/Data/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric_crownoff.las"
+Run started: Tue Jul 14 13:16:21 2026
+   D:/Enhanced Forest Inventory/Data/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric_crownoff.las: 179706463 points
+   Clipping D:/Enhanced Forest Inventory/Data/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric_crownoff.las...890654 points out of 179706463 written to output file
+Clipped data file produced:
+   D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon\clipped_to_polygon\clipped_4_20250407_LLR_L2_AllPoints_Orthometric_crownoff.las    Jul 14, 2026 @ 1:17 PM
+Run finished: Tue Jul 14 13:17:36 2026 (elapsed time: 75 seconds)
+Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: "C:\Users\W0491597\Documents\Arun\TreeAIBox (2)\TreeAIBox\Fusion\PolyClipData.exe"  /verbose /shape:2,5 "D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon\Plot_Polygon.shp" "D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon\clipped_to_polygon\clipped_5_20250407_LLR_L2_AllPoints_Orthometric_crownoff.las" "D:/Enhanced Forest Inventory/Data/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric_crownoff.las"
+Run started: Tue Jul 14 13:17:36 2026
+   D:/Enhanced Forest Inventory/Data/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric_crownoff.las: 179706463 points
+   Clipping D:/Enhanced Forest Inventory/Data/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric_crownoff.las...1695715 points out of 179706463 written to output file
+Clipped data file produced:
+   D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon\clipped_to_polygon\clipped_5_20250407_LLR_L2_AllPoints_Orthometric_crownoff.las    Jul 14, 2026 @ 1:18 PM
+Run finished: Tue Jul 14 13:18:33 2026 (elapsed time: 57 seconds)
+Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: "C:\Users\W0491597\Documents\Arun\TreeAIBox (2)\TreeAIBox\Fusion\PolyClipData.exe"  /verbose /shape:2,6 "D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon\Plot_Polygon.shp" "D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon\clipped_to_polygon\clipped_6_20250407_LLR_L2_AllPoints_Orthometric_crownoff.las" "D:/Enhanced Forest Inventory/Data/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric_crownoff.las"
+Run started: Tue Jul 14 13:18:33 2026
+   D:/Enhanced Forest Inventory/Data/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric_crownoff.las: 179706463 points
+   Clipping D:/Enhanced Forest Inventory/Data/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric_crownoff.las...868533 points out of 179706463 written to output file
+Clipped data file produced:
+   D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon\clipped_to_polygon\clipped_6_20250407_LLR_L2_AllPoints_Orthometric_crownoff.las    Jul 14, 2026 @ 1:19 PM
+Run finished: Tue Jul 14 13:19:29 2026 (elapsed time: 56 seconds)
+Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: "C:\Users\W0491597\Documents\Arun\TreeAIBox (2)\TreeAIBox\Fusion\PolyClipData.exe"  /verbose /shape:2,7 "D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon\Plot_Polygon.shp" "D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon\clipped_to_polygon\clipped_7_20250407_LLR_L2_AllPoints_Orthometric_crownoff.las" "D:/Enhanced Forest Inventory/Data/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric_crownoff.las"
+Run started: Tue Jul 14 13:19:29 2026
+   D:/Enhanced Forest Inventory/Data/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric_crownoff.las: 179706463 points
+   Clipping D:/Enhanced Forest Inventory/Data/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric_crownoff.las...619944 points out of 179706463 written to output file
+Clipped data file produced:
+   D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon\clipped_to_polygon\clipped_7_20250407_LLR_L2_AllPoints_Orthometric_crownoff.las    Jul 14, 2026 @ 1:20 PM
+Run finished: Tue Jul 14 13:20:28 2026 (elapsed time: 59 seconds)
+Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: "C:\Users\W0491597\Documents\Arun\TreeAIBox (2)\TreeAIBox\Fusion\PolyClipData.exe"  /verbose /shape:2,8 "D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon\Plot_Polygon.shp" "D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon\clipped_to_polygon\clipped_8_20250407_LLR_L2_AllPoints_Orthometric_crownoff.las" "D:/Enhanced Forest Inventory/Data/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric_crownoff.las"
+Run started: Tue Jul 14 13:20:28 2026
+   D:/Enhanced Forest Inventory/Data/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric_crownoff.las: 179706463 points
+   Clipping D:/Enhanced Forest Inventory/Data/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric_crownoff.las...575880 points out of 179706463 written to output file
+Clipped data file produced:
+   D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon\clipped_to_polygon\clipped_8_20250407_LLR_L2_AllPoints_Orthometric_crownoff.las    Jul 14, 2026 @ 1:21 PM
+Run finished: Tue Jul 14 13:21:23 2026 (elapsed time: 55 seconds)
+Done
