@@ -36519,3 +36519,14 @@ Clipped data file produced:
    D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon\clipped_to_polygon\clipped_8_20250407_LLR_L2_AllPoints_Orthometric_crownoff.las    Jul 14, 2026 @ 1:21 PM
 Run finished: Tue Jul 14 13:21:23 2026 (elapsed time: 55 seconds)
 Done
+**********
+ClipData v2.80 64-bit (FUSION v4.61) (Built on Sep  5 2024 15:14:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: "C:/Users/W0491597/Documents/Arun/TreeAIBox (2)/TreeAIBox/Fusion/clipdata64.exe"  /height "/dtm:D:/Enhanced Forest Inventory/Data/New DataStore/DTM/dtm_L3_Derived_20260407/20260424_LLR_L3/DTM/20260424_LLR_L3.dtm" "D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon/clipped_to_polygon/clipped_3_20250407_LLR_L2_AllPoints_Orthometric_crownoff.las" "D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon/clipped_to_polygon\normalized\clipped_3_20250407_LLR_L2_AllPoints_Orthometric_crownoff_normalized.las" 335529.406 4982781.378 335551.951 4982803.92
+Run started: Thu Aug  6 18:35:40 2026
+1152549 points were within the DTM extents..0 were not
+Data subsample file produced:
+   D:/Enhanced Forest Inventory/Data/Plot_Polygon/Study Area Polygon/clipped_to_polygon\normalized\clipped_3_20250407_LLR_L2_AllPoints_Orthometric_crownoff_normalized.las    Aug 6, 2026 @ 6:35 PM
+   1152549 points
+Run finished: Thu Aug  6 18:35:40 2026 (elapsed time: 0 seconds)
+Done

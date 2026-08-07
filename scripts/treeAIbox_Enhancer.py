@@ -900,6 +900,8 @@ class TreeVisualizerGUI(QMainWindow):
         self._branch_detection_version = 0
         # Signature of last volume calculation: (tree_id, trunk_version, branch_version)
         self._last_volume_calc_signature = None
+        # DBH reference height (customizable by user, default = 1.3m)
+        self.dbh_reference_height = 1.3
         # Last used detection parameters for change detection
         self._last_trunk_detection_params = None
         self._last_branch_detection_params = None
@@ -1397,6 +1399,24 @@ class TreeVisualizerGUI(QMainWindow):
         color_layout.addWidget(color_label)
         color_layout.addWidget(self.color_combo)
         viz_layout.addLayout(color_layout)
+
+        # DBH reference height (editable)
+        dbh_ref_layout = QHBoxLayout()
+        dbh_ref_label = QLabel("DBH Ref Height (m):")
+        dbh_ref_label.setFixedWidth(130)
+        dbh_ref_label.setStyleSheet("font-weight: bold; color: #4CAF50;")
+        self.dbh_height_input = QDoubleSpinBox()
+        self.dbh_height_input.setRange(0.1, 10.0)
+        self.dbh_height_input.setSingleStep(0.1)
+        self.dbh_height_input.setDecimals(2)
+        self.dbh_height_input.setValue(1.3)
+        self.dbh_height_input.setMinimumHeight(28)
+        self.dbh_height_input.setToolTip("DBH reference height above ground (standard: 1.3m).\nChanging this affects DBH calculations, batch analysis, and the orange DBH marker line.")
+        self.dbh_height_input.valueChanged.connect(self._on_dbh_height_changed)
+        dbh_ref_layout.addWidget(dbh_ref_label)
+        dbh_ref_layout.addWidget(self.dbh_height_input)
+        dbh_ref_layout.addStretch()
+        viz_layout.addLayout(dbh_ref_layout)
 
         # Split detection parameters
         split_group = QGroupBox("Split Detection Parameters")
@@ -2189,6 +2209,26 @@ class TreeVisualizerGUI(QMainWindow):
                 )
             except Exception:
                 pass
+        # Re-arm point picking after scene rebuild
+        self._rearm_point_picking()
+
+    def _rearm_point_picking(self):
+        """Re-enable point picking after the plotter has been cleared and repopulated.
+        
+        Must be called after every plotter.clear() + _restore_gdb_layers() to ensure
+        accurate point picking across scene rebuilds (trunk detection, branch detection,
+        color changes, etc.).
+        """
+        if self.plotter is None:
+            return
+        try:
+            self.plotter.disable_picking()
+        except Exception:
+            pass
+        try:
+            self.plotter.enable_point_picking(callback=self.on_point_picked, show_message=False)
+        except Exception:
+            pass
 
     def _add_gdb_layer_row(self, actor_name):
         """Add a control row to the GDB Layer Manager sidebar panel."""
@@ -2717,12 +2757,32 @@ class TreeVisualizerGUI(QMainWindow):
                     # Add a 3D label at the top-center of the bounding box
                     top_center = ((bounds[0] + bounds[1]) / 2.0, (bounds[2] + bounds[3]) / 2.0, top_z)
                     try:
-                        self.plotter.add_point_labels(np.array([top_center]), [f"{bounding_box_height:.2f} m"], point_size=0, font_size=10, text_color='yellow')
+                        self.plotter.add_point_labels(np.array([top_center]), [f"{bounding_box_height:.2f} m"], point_size=0, font_size=10, text_color='yellow', always_visible=True)
                     except Exception:
                         # Fallback: use add_point_labels without numpy array conversion if needed
-                        self.plotter.add_point_labels([top_center], [f"{bounding_box_height:.2f} m"], point_size=0, font_size=10, text_color='yellow')
+                        self.plotter.add_point_labels([top_center], [f"{bounding_box_height:.2f} m"], point_size=0, font_size=10, text_color='yellow', always_visible=True)
                 except Exception as e:
                     print(f"Warning: Failed to add bounding box height label: {e}")
+
+                # Draw DBH marker: a horizontal dashed line at the configured reference height above ground across the bounding box
+                try:
+                    dbh_ref_h = getattr(self, 'dbh_reference_height', 1.3)
+                    dbh_z = ground_level + dbh_ref_h
+                    mid_y = (bounds[2] + bounds[3]) / 2.0  # Center Y of bounding box
+                    # Horizontal line across the X extent of the bounding box at DBH height
+                    dbh_line_start = (bounds[0], mid_y, dbh_z)
+                    dbh_line_end = (bounds[1], mid_y, dbh_z)
+                    dbh_line = pv.Line(dbh_line_start, dbh_line_end)
+                    self.plotter.add_mesh(dbh_line, color='orange', line_width=3,
+                                        name='dbh_marker_line', label=f'DBH @ {dbh_ref_h:.1f}m')
+                    # Label at the midpoint of the DBH line
+                    dbh_mid = ((bounds[0] + bounds[1]) / 2.0, mid_y, dbh_z)
+                    self.plotter.add_point_labels([dbh_mid], [f"DBH ({dbh_ref_h:.1f}m)"],
+                                                point_size=0, font_size=9, text_color='orange',
+                                                always_visible=True,
+                                                name='dbh_marker_label')
+                except Exception as e:
+                    print(f"Warning: Failed to add DBH marker: {e}")
 
             # Enable analyze button for tree analysis
             self.analyze_button.setEnabled(True)
@@ -3610,34 +3670,48 @@ class TreeVisualizerGUI(QMainWindow):
             self.log_to_console("Radius export mode cancelled.")
 
     def _resolve_picked_point(self, picked_info):
-        """Resolve the picked point index and coordinates from a PyVista pick callback payload."""
+        """Resolve the picked point index and coordinates from a PyVista pick callback payload.
+        
+        Uses the 3D pick position and finds the closest point in the current tree points.
+        This is more reliable than VTK's point_index, which can return a non-closest point
+        due to ray-casting through dense point clouds.
+        """
         if self.current_tree_points is None or len(self.current_tree_points) == 0:
             return None, None
 
-        point_index = None
-
-        if hasattr(picked_info, 'point_index'):
-            point_index = picked_info.point_index
-        elif isinstance(picked_info, dict) and 'point_index' in picked_info:
-            point_index = picked_info['point_index']
+        # Extract the 3D pick position from the pick callback payload
+        picked_point = None
+        if hasattr(picked_info, 'picked_point'):
+            picked_point = np.asarray(picked_info.picked_point, dtype=float)
+        elif isinstance(picked_info, dict) and 'picked_point' in picked_info:
+            picked_point = np.asarray(picked_info['picked_point'], dtype=float)
+        elif hasattr(picked_info, 'points') and picked_info.points is not None:
+            picked_point = np.asarray(picked_info.points[0], dtype=float)
+        elif isinstance(picked_info, np.ndarray):
+            picked_point = picked_info.ravel()
         else:
-            picked_point = picked_info
-            if hasattr(picked_info, 'points'):
-                picked_point = picked_info.points[0]
-
-            if picked_point is not None:
-                picked_point = np.asarray(picked_point, dtype=float)
-                if picked_point.shape[0] >= 3:
-                    distances = np.sum((self.current_tree_points - picked_point[:3]) ** 2, axis=1)
-                    point_index = int(np.argmin(distances))
-
-        if point_index is None:
+            # Last resort: try to use point_index with distance check
+            point_index = None
+            if hasattr(picked_info, 'point_index'):
+                point_index = picked_info.point_index
+            elif isinstance(picked_info, dict) and 'point_index' in picked_info:
+                point_index = picked_info['point_index']
+            if point_index is not None:
+                try:
+                    point_index = int(point_index)
+                    if 0 <= point_index < len(self.current_tree_points):
+                        return point_index, self.current_tree_points[point_index]
+                except (TypeError, ValueError):
+                    pass
             return None, None
 
-        try:
-            point_index = int(point_index)
-        except (TypeError, ValueError):
+        if picked_point is None or picked_point.shape[0] < 3:
             return None, None
+
+        # Find the closest point in the current tree to the pick position
+        # This is more accurate than VTK's point_index for dense point clouds
+        squared_distances = np.sum((self.current_tree_points[:, :3] - picked_point[:3]) ** 2, axis=1)
+        point_index = int(np.argmin(squared_distances))
 
         if point_index < 0 or point_index >= len(self.current_tree_points):
             return None, None
@@ -3856,6 +3930,11 @@ class TreeVisualizerGUI(QMainWindow):
                 item.setForeground(QColor('red'))
             else:
                 item.setForeground(QColor('black'))  # Default color
+
+    def _on_dbh_height_changed(self, value):
+        """Called when the user changes the DBH reference height via the spinbox."""
+        self.dbh_reference_height = float(value)
+        self.log_to_console(f"📏 DBH reference height set to: {self.dbh_reference_height:.2f}m (re-visualize tree to update marker)")
 
     def select_all_points(self):
         """Select all points in the current visualization without drawing."""
@@ -4839,6 +4918,10 @@ class TreeVisualizerGUI(QMainWindow):
             # Initialize trunk summary container
             self.trunk_volume_summary = {}
 
+            # Suppress rendering during batch additions for performance
+            if self.plotter is not None:
+                self.plotter.suppress_rendering = True
+
             for trunk_id, branch_list in sorted(self.volume_groups_by_trunk.items(), key=lambda x: x[0]):
                 trunk_total_vol = 0.0
                 trunk_point_count = 0
@@ -4917,12 +5000,21 @@ class TreeVisualizerGUI(QMainWindow):
 
                 self.log_to_console(f"🧾 Trunk T{trunk_id} total volume: {trunk_total_vol:.4f} m³ ({len(trunk_branch_details)} branches, {trunk_point_count} pts)")
 
+            # Re-enable rendering after batch additions
+            if self.plotter is not None:
+                self.plotter.suppress_rendering = False
+                self.plotter.render()
+
             # Also log overall totals
             overall_total = sum(t['total_volume'] for t in self.trunk_volume_summary.values())
             self.log_to_console(f"📊 Overall tree total (sum of trunks): {overall_total:.4f} m³")
 
         else:
             # Fallback to original behavior (global/grouped branches)
+            # Suppress rendering during batch additions for performance
+            if self.plotter is not None:
+                self.plotter.suppress_rendering = True
+
             for group_branch_id, _, group_points in volume_groups:
                 point_color = section_colors[(section_id - 1) % len(section_colors)]
                 circle_color = section_colors[(section_id - 1) % len(section_colors)]
@@ -4973,6 +5065,11 @@ class TreeVisualizerGUI(QMainWindow):
                     self.log_to_console(f"📏 Calculated volume for tree {section_tree_id}: {section_volume:.4f} m³ (height: {section_data.get('height_range', 0.0):.2f}m, Z {section_data.get('min_z', 0.0):.2f}-{section_data.get('max_z', 0.0):.2f}m)")
 
                 section_id += 1
+
+            # Re-enable rendering after batch additions
+            if self.plotter is not None:
+                self.plotter.suppress_rendering = False
+                self.plotter.render()
 
             # Perform global ground proximity check (allow in branch mode too)
             # This enables using globally fitted/extrapolated circles as DBH references
@@ -6177,6 +6274,7 @@ class TreeVisualizerGUI(QMainWindow):
                             [f'T{trunk_id}'],
                             font_size=14,
                             text_color='white',
+                            always_visible=True,
                             name=f'Label_Trunk_{trunk_id}'
                         )
                     except Exception:
@@ -6192,7 +6290,7 @@ class TreeVisualizerGUI(QMainWindow):
 
             self.plotter.reset_camera()
             self.plotter.update()
-
+            
             # Noise points
             noise_mask = self.trunk_assignment == -1
             if np.any(noise_mask):
@@ -6399,6 +6497,11 @@ class TreeVisualizerGUI(QMainWindow):
             # Store branch assignment in memory for visualization and export
             # (LAS field modification may be handled during save operation)
             self.log_to_console(f"✅ Branch assignment stored in memory for visualization")
+
+            # ── Merge overlapping branches within each trunk ──
+            point_to_branch, merge_report = self._merge_overlapping_branches(point_to_branch)
+            self.log_to_console(merge_report)
+            
             # Enable selection and volume tools now that branch detection exists
             try:
                 if hasattr(self, 'select_all_points_button'):
@@ -6527,6 +6630,7 @@ class TreeVisualizerGUI(QMainWindow):
                             [label_text],
                             font_size=12,
                             text_color='white',
+                            always_visible=True,
                             name=f'Label_Branch_{branch_id}'
                         )
                     except Exception as label_error:
@@ -6561,7 +6665,10 @@ class TreeVisualizerGUI(QMainWindow):
                 sizes = [b['size'] for b in branch_info.values()]
                 self.log_to_console(f"  Branch size range: {min(sizes)}-{max(sizes)} points")
                 self.log_to_console(f"  Average branch size: {np.mean(sizes):.1f} points")
-            
+
+            # ── Vertical proximity analysis per trunk ──
+            self._analyze_branch_vertical_proximity()
+
             # Update and display
             self.plotter.reset_camera()
             self.plotter.update()
@@ -6573,6 +6680,208 @@ class TreeVisualizerGUI(QMainWindow):
             self.log_to_console(f"❌ Error visualizing branches: {str(e)}")
             import traceback
             self.log_to_console(traceback.format_exc())
+
+    def _merge_overlapping_branches(self, point_to_branch: np.ndarray) -> Tuple[np.ndarray, str]:
+        """
+        Merge branches within each trunk that have overlapping Z ranges.
+        Two branches overlap if: next.Z_min < current.Z_max (negative vertical gap).
+        
+        Returns:
+            (updated_point_to_branch, merge_report_string)
+        """
+        if not hasattr(self, 'branch_meta') or not self.branch_meta:
+            return point_to_branch, ""
+
+        # Group branches by trunk with their Z spans
+        trunk_branches: Dict[int, List[Dict[str, Any]]] = {}
+        for branch_id, meta in self.branch_meta.items():
+            trunk_id = meta.get('trunk_id', '?')
+            if trunk_id == '?':
+                continue
+            trunk_id = int(trunk_id)
+            z_min, z_max = meta.get('z_span', (0.0, 0.0))
+            trunk_branches.setdefault(trunk_id, []).append({
+                'branch_id': int(branch_id),
+                'z_min': float(z_min),
+                'z_max': float(z_max),
+            })
+
+        # Build remapping: old_branch_id -> merged_into_branch_id
+        remap: Dict[int, int] = {}
+        total_merged = 0
+        merge_details: List[str] = []
+
+        for trunk_id in sorted(trunk_branches.keys()):
+            branches = trunk_branches[trunk_id]
+            if len(branches) < 2:
+                continue
+
+            # Sort by Z_min
+            branches.sort(key=lambda b: b['z_min'])
+
+            # Walk through and find overlapping groups
+            i = 0
+            while i < len(branches):
+                group = [branches[i]]
+                j = i + 1
+                while j < len(branches):
+                    # Check if branch[j] overlaps with the combined group's Z_max
+                    group_z_max = max(b['z_max'] for b in group)
+                    if branches[j]['z_min'] < group_z_max:  # Overlap
+                        group.append(branches[j])
+                        j += 1
+                    else:
+                        break
+
+                if len(group) >= 2:
+                    # Merge group: keep the first branch_id, remap others
+                    keeper_id = group[0]['branch_id']
+                    merged_ids = []
+                    for br in group[1:]:
+                        remap[br['branch_id']] = keeper_id
+                        merged_ids.append(br['branch_id'])
+
+                    # Update meta: merge point counts and Z spans
+                    if keeper_id in self.branch_meta:
+                        keeper_meta = self.branch_meta[keeper_id]
+                        for br in group[1:]:
+                            if br['branch_id'] in self.branch_meta:
+                                old_meta = self.branch_meta[br['branch_id']]
+                                keeper_meta['point_count'] += old_meta.get('point_count', 0)
+                                old_zmin, old_zmax = keeper_meta.get('z_span', (float('inf'), float('-inf')))
+                                new_zmin = min(old_zmin, old_meta.get('z_span', (float('inf'), float('-inf')))[0])
+                                new_zmax = max(old_zmax, old_meta.get('z_span', (float('-inf'), float('inf')))[1])
+                                keeper_meta['z_span'] = (new_zmin, new_zmax)
+                                # Delete the merged branch's meta
+                                del self.branch_meta[br['branch_id']]
+
+                    total_merged += len(merged_ids)
+                    z_range = f"{group[0]['z_min']:.2f}–{group_z_max:.2f}m"
+                    merged_str = ", ".join(f"B{b}" for b in merged_ids)
+                    merge_details.append(f"     T{trunk_id}: B{keeper_id} ← merged {merged_str} | Z range: {z_range}")
+
+                i = j  # Move to next unprocessed branch
+
+        # Apply remapping to point_to_branch
+        if remap:
+            remap_array = np.full(point_to_branch.max() + 1, -1, dtype=int)
+            for old_id, new_id in remap.items():
+                remap_array[old_id] = new_id
+            # Fill self-references
+            unique_ids = np.unique(point_to_branch)
+            for bid in unique_ids:
+                if bid >= 0 and bid < len(remap_array) and remap_array[bid] == -1:
+                    remap_array[bid] = bid
+
+            valid_mask = point_to_branch >= 0
+            point_to_branch[valid_mask] = remap_array[point_to_branch[valid_mask]]
+
+        # Build report
+        if total_merged == 0:
+            return point_to_branch, ""
+
+        report_lines = [""]
+        report_lines.append(f"🔄 MERGED OVERLAPPING BRANCHES: {total_merged} branch(es) merged into existing branches")
+        report_lines.extend(merge_details)
+        report_lines.append(f"   Remaining unique branches after merge: {len([b for b in np.unique(point_to_branch) if b >= 0])}")
+        return point_to_branch, "\n".join(report_lines)
+
+    def _analyze_branch_vertical_proximity(self):
+        """Analyze vertical gaps between branches within each trunk and print a proximity table."""
+        if not hasattr(self, 'branch_meta') or not self.branch_meta:
+            self.log_to_console("⚠️ No branch metadata available for vertical proximity analysis.")
+            return
+
+        # Group branches by trunk_id
+        trunk_branches: Dict[int, List[Dict[str, Any]]] = {}
+        for branch_id, meta in self.branch_meta.items():
+            trunk_id = meta.get('trunk_id', '?')
+            if trunk_id == '?':
+                continue
+            trunk_id = int(trunk_id)
+            z_min, z_max = meta.get('z_span', (0.0, 0.0))
+            trunk_branches.setdefault(trunk_id, []).append({
+                'branch_id': int(branch_id),
+                'local_id': meta.get('local_id', branch_id),
+                'z_min': float(z_min),
+                'z_max': float(z_max),
+                'height': float(z_max) - float(z_min),
+                'point_count': meta.get('point_count', 0),
+            })
+
+        if not trunk_branches:
+            self.log_to_console("⚠️ No trunk-scoped branches found for vertical proximity analysis.")
+            return
+
+        self.log_to_console(f"\n{'='*90}")
+        self.log_to_console(f"📐 BRANCH VERTICAL PROXIMITY ANALYSIS")
+        self.log_to_console(f"{'='*90}")
+
+        for trunk_id in sorted(trunk_branches.keys()):
+            branches = trunk_branches[trunk_id]
+            if len(branches) < 2:
+                self.log_to_console(f"\n  Trunk T{trunk_id}: only 1 branch — no gaps to compare.")
+                continue
+
+            # Sort by min Z (bottom of branch)
+            branches.sort(key=lambda b: b['z_min'])
+
+            self.log_to_console(f"\n  ┌─ Trunk T{trunk_id} ({len(branches)} branches) ───────────────────────────────┐")
+            header = f"  │ {'Branch':<10} {'Z Min (m)':>10} {'Z Max (m)':>10} {'Height (m)':>10} {'Gap Below (m)':>14} {'Status':<16} │"
+            self.log_to_console(header)
+            self.log_to_console(f"  │{'-' * 86}│")
+
+            for i, br in enumerate(branches):
+                if i == 0:
+                    # First (lowest) branch — gap to ground
+                    gap_below = br['z_min']  # Distance from ground (min Z of branch) - we'd need tree base
+                    # Get tree base from current_tree_points if available
+                    tree_base = None
+                    if hasattr(self, 'current_tree_points') and self.current_tree_points is not None:
+                        tree_base = float(np.min(self.current_tree_points[:, 2]))
+                    if tree_base is not None:
+                        gap_below = br['z_min'] - tree_base
+                        status = "↳ from tree base"
+                    else:
+                        status = "↳ lowest branch"
+                else:
+                    # Gap between this branch's bottom and previous branch's top
+                    gap_below = br['z_min'] - branches[i - 1]['z_max']
+                    if gap_below <= 0.05:
+                        status = "⚠ overlapping"
+                    elif gap_below < 0.15:
+                        status = "● very close"
+                    elif gap_below < 0.30:
+                        status = "● close"
+                    elif gap_below < 0.50:
+                        status = "◐ moderate"
+                    else:
+                        status = "○ far apart"
+
+                branch_label = f"T{trunk_id}.B{br['local_id']}"
+                self.log_to_console(
+                    f"  │ {branch_label:<10} {br['z_min']:>10.2f} {br['z_max']:>10.2f} "
+                    f"{br['height']:>10.2f} {gap_below:>14.2f} {status:<16} │"
+                )
+
+            # Summary stats for this trunk
+            gaps = []
+            for i in range(1, len(branches)):
+                gaps.append(branches[i]['z_min'] - branches[i - 1]['z_max'])
+            if gaps:
+                min_gap = min(gaps)
+                max_gap = max(gaps)
+                avg_gap = np.mean(gaps)
+                close_count = sum(1 for g in gaps if g < 0.15)
+                overlap_count = sum(1 for g in gaps if g <= 0.05)
+                self.log_to_console(f"  └{'─' * 86}┘")
+                self.log_to_console(f"     Total gaps: {len(gaps)} | Avg: {avg_gap:.2f}m | Min: {min_gap:.2f}m | Max: {max_gap:.2f}m")
+                if close_count > 0:
+                    self.log_to_console(f"     ⚠ {close_count} branch pair(s) vertically close (<15cm)")
+                if overlap_count > 0:
+                    self.log_to_console(f"     ❗ {overlap_count} branch pair(s) overlapping vertically (≤5cm)")
+
+        self.log_to_console(f"{'='*90}\n")
 
     def select_volume_folder(self):
         """Allow user to pre-select a folder for batch volume saving."""
@@ -7295,12 +7604,12 @@ Important:
 
             self.log_to_console(f"📊 Added section {section_id} with {len(circle_centers)} {measurement_label} circles")
 
-            # Extract DBH at 1.3m above the tree base using the AVERAGE radius (same as red circles)
+            # Extract DBH at the configured reference height above the tree base using the AVERAGE radius
             # Only compute DBH when this section contains the global DBH height.
             dbh_at_1_3m = None
             dbh_center_at_1_3m = None
             dbh_z_at_1_3m = None
-            target_height = 1.3  # Standard DBH height
+            target_height = getattr(self, 'dbh_reference_height', 1.3)
             tree_base_z = float(np.min(self.current_tree_points[:, 2])) if hasattr(self, 'current_tree_points') and self.current_tree_points is not None else float(min_z)
             dbh_target_z = tree_base_z + target_height
 
@@ -7319,7 +7628,7 @@ Important:
                     dbh_center_at_1_3m = np.array([circle_centers[target_idx][0], circle_centers[target_idx][1], dbh_target_z])
                     dbh_z_at_1_3m = dbh_target_z
 
-                    self.log_to_console(f"🌳 DBH at 1.3m above base: {dbh_at_1_3m*100:.1f} cm (radius at target Z: {avg_radius_at_1_3m*100:.1f} cm)")
+                    self.log_to_console(f"🌳 DBH at {target_height:.1f}m above base: {dbh_at_1_3m*100:.1f} cm (radius at target Z: {avg_radius_at_1_3m*100:.1f} cm)")
 
                     # DBH visualization at section level has been removed to avoid duplicate/green overlays.
                     # DBH value is still calculated and returned in section data; trunk-level (blue) overlays
@@ -7327,7 +7636,7 @@ Important:
                 elif measurement_label.lower() == "diameter":
                     self.log_to_console(f"⚠️ Section height range ({height_range:.2f}m) does not include DBH height at {dbh_target_z:.2f}m")
                 else:
-                    self.log_to_console(f"⚠️ Section height range ({height_range:.2f}m) doesn't reach 1.3m for {measurement_label} measurement")
+                    self.log_to_console(f"⚠️ Section height range ({height_range:.2f}m) doesn't reach {target_height:.1f}m for {measurement_label} measurement")
 
             # Return circle data for volume calculation
             return {
@@ -7421,8 +7730,9 @@ Important:
         # Get the last (lowest) circle data for extrapolation
         last_center, last_radius = existing_circles[-1]
 
-        # Extrapolate downward
+        # Extrapolate downward (batch circles into single mesh for performance)
         extrapolated_circles = []
+        extrapolated_meshes = []
         current_z = min_z - step
 
         for i in range(num_additional_circles):
@@ -7437,14 +7747,21 @@ Important:
 
             self.log_to_console(f"➕ Added extrapolated circle at Z={current_z:.2f}m, center=({last_center[0]:.3f}, {last_center[1]:.3f}), radius={last_radius:.3f}m")
 
-            # Add visualization for extrapolated circle
+            # Build circle mesh but defer adding to plotter
             circle = pv.Circle(radius=last_radius, resolution=32)
             circle.translate(extrapolated_center, inplace=True)
-            self.plotter.add_mesh(circle, color=circle_color, opacity=0.3,
-                                name=f'dbh_circle_section_{section_id}_extrapolated_{i}',
-                                label=f'Section {section_id} Extrapolated Z={current_z:.1f}m')
+            extrapolated_meshes.append(circle)
 
             current_z -= step
+
+        # Merge all extrapolated circles into a single mesh for instant rendering
+        if extrapolated_meshes:
+            merged_extrapolated = extrapolated_meshes[0].copy()
+            for mesh in extrapolated_meshes[1:]:
+                merged_extrapolated = merged_extrapolated + mesh
+            self.plotter.add_mesh(merged_extrapolated, color=circle_color, opacity=0.3,
+                                name=f'dbh_circle_section_{section_id}_extrapolated',
+                                label=f'Section {section_id} Extrapolated ({len(extrapolated_meshes)} circles)')
 
         # Add extrapolated circles to the section data
         all_circles = existing_circles + extrapolated_circles
@@ -7898,6 +8215,9 @@ Important:
                 # NEVER clear the plotter - overlay volume results on existing tree visualization
                 # This preserves the tree visualization while adding volume analysis
 
+                # Suppress rendering during batch additions for performance
+                self.plotter.suppress_rendering = True
+
                 for group_branch_id, _, group_points in volume_groups:
                     point_color = section_colors[(section_id - 1) % len(section_colors)]
                     circle_color = section_colors[(section_id - 1) % len(section_colors)]
@@ -8017,10 +8337,14 @@ Important:
                             section_metric_values_cm.append(dbh_cm)
                         metric_text = f"{dbh_cm:.1f} cm" if dbh_cm is not None else "N/A"
                         self.log_to_console(
-                            f"   ↳ DBH @1.3m | Section {section_id}: {metric_text}"
+                            f"   ↳ DBH @{getattr(self, 'dbh_reference_height', 1.3):.1f}m | Section {section_id}: {metric_text}"
                         )
 
                     section_id += 1
+
+                # Re-enable rendering after batch additions
+                self.plotter.suppress_rendering = False
+                self.plotter.render()
 
                 # Perform global ground proximity check in all modes.
                 # In branch mode this helps DBH estimation when a trunk misses the exact DBH plane.
@@ -8052,12 +8376,14 @@ Important:
 
                 if is_branch_mode:
                     if trunk_dbh_summary:
-                        self.log_to_console("📐 Trunk DBH summary (1.3m above base):")
+                        dbh_msg = f"📐 Trunk DBH summary ({getattr(self, 'dbh_reference_height', 1.3):.1f}m above base):"
+                        self.log_to_console(dbh_msg)
                         for line in trunk_dbh_lines:
                             self.log_to_console(line)
                             print(line)
                     else:
-                        self.log_to_console("📐 Trunk DBH summary (1.3m above base): none")
+                        dbh_msg = f"📐 Trunk DBH summary ({getattr(self, 'dbh_reference_height', 1.3):.1f}m above base): none"
+                        self.log_to_console(dbh_msg)
 
                 # Update info text to show accumulated results
                 total_sections = len(self.accumulated_volume_sections)
@@ -8065,6 +8391,7 @@ Important:
                 total_volume = sum(section['volume'] for section in self.accumulated_volume_sections)
 
                 # Show measurement text based on mode
+                dbh_h = getattr(self, 'dbh_reference_height', 1.3)
                 if is_branch_mode:
                     if trunk_dbh_summary:
                         dbh_lines = [f"T{tid}: {dbh:.1f} cm" for tid, dbh in sorted(trunk_dbh_summary.items())]
@@ -8073,16 +8400,16 @@ Important:
                         dbh_text = "\nDBH by trunk: N/A"
                 else:
                     dbh_at_1_3m = last_section_data.get('dbh_at_1_3m') if last_section_data else None
-                    dbh_text = f"\nLast DBH @1.3m: {dbh_at_1_3m*100:.1f} cm" if dbh_at_1_3m else "\nLast DBH @1.3m: N/A"
+                    dbh_text = f"\nLast DBH @{dbh_h:.1f}m: {dbh_at_1_3m*100:.1f} cm" if dbh_at_1_3m else f"\nLast DBH @{dbh_h:.1f}m: N/A"
 
                 metric_summary_text = ""
                 if is_branch_mode and trunk_dbh_summary:
                     metric_summary_text = (
-                        f"\nDBH @1.3m (all trunks): min {np.min(list(trunk_dbh_summary.values())):.1f}, "
+                        f"\nDBH @{dbh_h:.1f}m (all trunks): min {np.min(list(trunk_dbh_summary.values())):.1f}, "
                         f"max {np.max(list(trunk_dbh_summary.values())):.1f}, avg {np.mean(list(trunk_dbh_summary.values())):.1f} cm"
                     )
                 elif section_metric_values_cm:
-                    metric_name = "DBH @1.3m (all sections)" if not is_branch_mode else "Diameter (all sections)"
+                    metric_name = f"DBH @{dbh_h:.1f}m (all sections)" if not is_branch_mode else "Diameter (all sections)"
                     metric_summary_text = (
                         f"\n{metric_name}: min {np.min(section_metric_values_cm):.1f}, "
                         f"max {np.max(section_metric_values_cm):.1f}, avg {np.mean(section_metric_values_cm):.1f} cm"
@@ -8250,7 +8577,7 @@ Important:
     def _build_trunk_dbh_summary_table(self):
         """Build trunk-level DBH totals using section-fitted circles (same pipeline as volume sections)."""
         trunk_dbh: Dict[int, Dict[str, Any]] = {}
-        target_height = 1.3
+        target_height = getattr(self, 'dbh_reference_height', 1.3)
 
         if hasattr(self, 'current_tree_points') and self.current_tree_points is not None:
             tree_base_z = float(np.min(self.current_tree_points[:, 2]))
@@ -8330,8 +8657,10 @@ Important:
 
         return trunk_dbh_values, rows, trunk_dbh
 
-    def _fit_single_circle_at_height(self, points, target_z, target_height=1.3, thickness=0.05, search_step=0.05, max_search=0.30):
+    def _fit_single_circle_at_height(self, points, target_z, target_height=None, thickness=0.05, search_step=0.05, max_search=0.30):
         """Fallback only: fit one circle at the requested height using the section DBH logic."""
+        if target_height is None:
+            target_height = getattr(self, 'dbh_reference_height', 1.3)
         if points is None or len(points) < 3:
             return None
 
@@ -8399,6 +8728,7 @@ Important:
                     font_size=12,
                     text_color='blue',
                     point_size=0,
+                    always_visible=True,
                     name=f'trunk_dbh_label_{trunk_id}'
                 )
             except Exception as e:
@@ -8421,6 +8751,9 @@ Important:
             
             # Clear volume-related actors from plotter
             if self.plotter is not None:
+                # Suppress rendering during batch removal for performance
+                self.plotter.suppress_rendering = True
+                
                 # Remove all volume-related and DBH-related meshes and actors
                 actors_to_remove = []
                 for actor_name in self.plotter.actors:
@@ -8448,6 +8781,10 @@ Important:
                                         name='volume_info_text')
                 except:
                     pass
+                
+                # Re-enable rendering after batch removal
+                self.plotter.suppress_rendering = False
+                self.plotter.render()
                 
                 self.plotter.update()
             
@@ -8779,8 +9116,13 @@ Important:
             
             # Restore visualizations for all loaded sections (batched for better performance)
             self.log_to_console(f"🎨 Restoring visualizations for {total_sections} sections...")
+            if self.plotter is not None:
+                self.plotter.suppress_rendering = True
             for section_info in self.accumulated_volume_sections:
                 self._restore_section_visualization(section_info)
+            if self.plotter is not None:
+                self.plotter.suppress_rendering = False
+                self.plotter.render()
             self.log_to_console(f"✅ Visualization restoration complete")
             
             QMessageBox.information(self, "Load Successful",
