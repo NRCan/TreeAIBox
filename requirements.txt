@@ -17,6 +17,9 @@ PyQt6>=6.11.0
 PyQt6-WebEngine>=6.11.0
 # PyQt6.QtWebChannel is included with PyQt6, no separate package needed
 
+# GUI framework (used by scripts/Processing_WorkFlow/normalize_las_gui.py)
+PySide6>=6.11.0
+
 # Deep learning (used by TreeAIBox.py)
 torch>=2.13.0
 
@@ -24,6 +27,19 @@ torch>=2.13.0
 requests>=2.34.0
 
 # ── Optional dependencies ──────────────────────────────
+# Geospatial / shapefile handling (used by treeAIbox_Enhancer.py)
+geopandas>=1.1.0
+pyogrio>=0.13.0
+shapely>=2.1.0
+# fiona (requires GDAL to build on Windows; pyogrio is used as fallback)
+# fiona
+
+# Image handling (Pillow is also pulled in by matplotlib)
+Pillow>=12.0.0
+
+# LLM integration (used by treeAIbox_Enhancer.py)
+litellm>=1.95.0
+
 # CloudCompare Python plugin (for CloudCompare integration)
 # pycc
 # cccorelib

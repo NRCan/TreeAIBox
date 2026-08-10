@@ -36530,3 +36530,14 @@ Data subsample file produced:
    1152549 points
 Run finished: Thu Aug  6 18:35:40 2026 (elapsed time: 0 seconds)
 Done
+**********
+ClipData v2.80 64-bit (FUSION v4.61) (Built on Sep  5 2024 15:14:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: D:/Projects/TreeAIBox/Fusion/clipdata64.exe  /height /dtm:D:/Projects/LidarData/DTM/20260424_LLR_L3.dtm "D:/Projects/LidarData/Leaf Off/clipped_3_20250407_LLR_L2_AllPoints_Orthometric_crownoff.las" "D:/Projects/LidarData/Leaf Off\normalized\clipped_3_20250407_LLR_L2_AllPoints_Orthometric_crownoff_normalized.las" 335529.406 4982781.378 335551.951 4982803.92
+Run started: Fri Aug  7 19:33:34 2026
+1152549 points were within the DTM extents..0 were not
+Data subsample file produced:
+   D:/Projects/LidarData/Leaf Off\normalized\clipped_3_20250407_LLR_L2_AllPoints_Orthometric_crownoff_normalized.las    Aug 7, 2026 @ 7:33 PM
+   1152549 points
+Run finished: Fri Aug  7 19:33:34 2026 (elapsed time: 0 seconds)
+Done

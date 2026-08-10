@@ -865,6 +865,8 @@ class TreeVisualizerGUI(QMainWindow):
         self.plotter = None
         # GDB overlay layers: name -> {coords, color, point_size, visible, render_spheres}
         self.gdb_layers = {}
+        # When True, the point picker resolves GDB overlay points instead of tree points
+        self.gdb_pick_mode = False
         # Polygon selection variables
         self.polygon_selection_mode = False
         self.polygon_points = []
@@ -1291,6 +1293,24 @@ class TreeVisualizerGUI(QMainWindow):
         gdb_layer_vbox = QVBoxLayout(self.gdb_layer_group)
         gdb_layer_vbox.setSpacing(6)
         gdb_layer_vbox.setContentsMargins(8, 14, 8, 8)
+
+        self.gdb_pick_mode_button = QPushButton("Pick GDB Points: OFF")
+        self.gdb_pick_mode_button.setCheckable(True)
+        self.gdb_pick_mode_button.setToolTip(
+            "Toggle GDB pick mode. When ON, clicking a GDB sphere shows its attributes "
+            "from the geodatabase. When OFF, normal tree point picking is used."
+        )
+        self.gdb_pick_mode_button.setStyleSheet("""
+            QPushButton {
+                background-color: #363636; border: 1px solid #555555; color: #e0e0e0;
+                padding: 6px 10px; font-size: 11px; border-radius: 4px;
+            }
+            QPushButton:checked {
+                background-color: #1976D2; border: 1px solid #1976D2; color: white;
+            }
+        """)
+        self.gdb_pick_mode_button.clicked.connect(self._on_gdb_pick_mode_toggled)
+        gdb_layer_vbox.addWidget(self.gdb_pick_mode_button)
 
         self.gdb_layers_scroll = QScrollArea()
         self.gdb_layers_scroll.setWidgetResizable(True)
@@ -2159,6 +2179,9 @@ class TreeVisualizerGUI(QMainWindow):
                 "visible": True,
                 "layer_name": layer_name,
                 "n_features": n_features,
+                "gdf": gdf,
+                "label_field": None,
+                "label_visible": False,
             }
 
             self.plotter.add_points(
@@ -2168,6 +2191,7 @@ class TreeVisualizerGUI(QMainWindow):
                 render_points_as_spheres=render_spheres,
                 name=actor_name
             )
+            self._set_actor_pickable(actor_name, self.gdb_pick_mode)
             self.plotter.reset_camera()
             self.plotter.update()
 
@@ -2207,6 +2231,10 @@ class TreeVisualizerGUI(QMainWindow):
                     name=actor_name,
                     reset_camera=False
                 )
+                self._set_actor_pickable(actor_name, self.gdb_pick_mode)
+                # Restore labels if they were enabled
+                if layer.get("label_visible") and layer.get("label_field"):
+                    self._refresh_gdb_labels(actor_name)
             except Exception:
                 pass
         # Re-arm point picking after scene rebuild
@@ -2229,6 +2257,153 @@ class TreeVisualizerGUI(QMainWindow):
             self.plotter.enable_point_picking(callback=self.on_point_picked, show_message=False)
         except Exception:
             pass
+
+    def _set_actor_pickable(self, name, pickable):
+        """Toggle picking on a named actor.
+
+        Overlay layers (GDB imports, bounding box, DBH marker, etc.) are made
+        non-pickable so they do not steal picks from the tree point cloud and
+        corrupt point-picking accuracy.
+        """
+        if not self.plotter:
+            return
+        try:
+            actors = self.plotter.actors
+            actor = actors.get(name) if hasattr(actors, "get") else actors[name]
+        except Exception:
+            actor = None
+        if actor is None:
+            return
+        candidates = [actor]
+        try:
+            prop = getattr(actor, "prop", None)
+        except Exception:
+            prop = None
+        if prop is not None:
+            candidates.append(prop)
+        for obj in candidates:
+            try:
+                setter = getattr(obj, "SetPickable", None)
+            except Exception:
+                setter = None
+            if callable(setter):
+                try:
+                    setter(bool(pickable))
+                    return
+                except Exception:
+                    continue
+
+    def _on_gdb_pick_mode_toggled(self, checked):
+        """Toggle between GDB point picking and tree point picking."""
+        self.gdb_pick_mode = bool(checked)
+        if hasattr(self, 'gdb_pick_mode_button'):
+            self.gdb_pick_mode_button.setText("Pick GDB Points: ON" if checked else "Pick GDB Points: OFF")
+        self._apply_pick_mode()
+        if checked:
+            self.log_to_console("GDB pick mode ON: click a GDB sphere to view its attributes.")
+        else:
+            self.log_to_console("GDB pick mode OFF: tree point picking restored.")
+
+    def _apply_pick_mode(self):
+        """Set actor pickability based on the current pick mode.
+
+        GDB pick mode ON  -> GDB layers pickable, tree point cloud not pickable.
+        GDB pick mode OFF -> tree point cloud pickable, GDB layers not pickable.
+        """
+        if not self.plotter:
+            return
+        gdb_mode = getattr(self, 'gdb_pick_mode', False)
+        for actor_name in list(self.gdb_layers.keys()):
+            self._set_actor_pickable(actor_name, gdb_mode)
+        self._set_actor_pickable('tree_point_cloud', not gdb_mode)
+
+    def _extract_picked_position(self, picked_info):
+        """Extract the 3D picked position from a PyVista pick callback payload."""
+        try:
+            if hasattr(picked_info, 'picked_point'):
+                return np.asarray(picked_info.picked_point, dtype=float)
+            if isinstance(picked_info, dict) and 'picked_point' in picked_info:
+                return np.asarray(picked_info['picked_point'], dtype=float)
+            if hasattr(picked_info, 'points') and picked_info.points is not None:
+                return np.asarray(picked_info.points[0], dtype=float)
+            if isinstance(picked_info, np.ndarray):
+                return picked_info.ravel()
+        except Exception:
+            return None
+        return None
+
+    def _handle_gdb_pick(self, picked_info):
+        """Resolve a pick against GDB overlay layers and show feature attributes."""
+        picked_point = self._extract_picked_position(picked_info)
+        if picked_point is None or len(picked_point) < 3:
+            self.log_to_console("Warning: Could not resolve GDB pick position")
+            return
+
+        best = None  # (distance, actor_name, feature_index)
+        for actor_name, layer in self.gdb_layers.items():
+            if not layer.get("visible", True):
+                continue
+            coords = layer.get("coords")
+            if coords is None or len(coords) == 0:
+                continue
+            d2 = np.sum((np.asarray(coords)[:, :3] - picked_point[:3]) ** 2, axis=1)
+            idx = int(np.argmin(d2))
+            dist = float(np.sqrt(d2[idx]))
+            if best is None or dist < best[0]:
+                best = (dist, actor_name, idx)
+
+        if best is None:
+            self.log_to_console("No visible GDB points available to pick.")
+            return
+
+        dist, actor_name, idx = best
+        self._show_gdb_feature_details(actor_name, idx)
+
+    def _show_gdb_feature_details(self, actor_name, feature_index):
+        """Log the geodatabase attributes for a picked GDB feature to the UI console."""
+        layer = self.gdb_layers.get(actor_name, {})
+        layer_label = layer.get("layer_name", actor_name)
+        coords = layer.get("coords")
+        gdf = layer.get("gdf")
+
+        self.log_to_console("=" * 50)
+        self.log_to_console(f"🔍 GDB Point Picked — Layer: {layer_label}  |  Feature #{feature_index}")
+        self.log_to_console("-" * 50)
+
+        if coords is not None and 0 <= feature_index < len(coords):
+            x, y, z = np.asarray(coords)[feature_index][:3]
+            self.log_to_console(f"📍 X: {x:.3f}  Y: {y:.3f}  Z: {z:.3f}")
+        self.log_to_console("-" * 50)
+
+        if gdf is not None and 0 <= feature_index < len(gdf):
+            try:
+                geom_name = gdf.geometry.name
+            except Exception:
+                geom_name = 'geometry'
+            row = gdf.iloc[feature_index]
+            for col in gdf.columns:
+                if col == geom_name:
+                    continue
+                self.log_to_console(f"   {col}: {row[col]}")
+        else:
+            self.log_to_console("(no attribute table stored for this layer)")
+
+        self.log_to_console("=" * 50)
+
+    def _show_text_dialog(self, title, text):
+        """Show a simple read-only text dialog."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle(title)
+        dlg.resize(420, 480)
+        layout = QVBoxLayout(dlg)
+        text_edit = QTextEdit()
+        text_edit.setReadOnly(True)
+        text_edit.setPlainText(text)
+        layout.addWidget(text_edit)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dlg.accept)
+        layout.addWidget(close_btn)
+        dlg.exec()
 
     def _add_gdb_layer_row(self, actor_name):
         """Add a control row to the GDB Layer Manager sidebar panel."""
@@ -2262,6 +2437,26 @@ class TreeVisualizerGUI(QMainWindow):
 
         color_dot = QLabel("●")
         color_dot.setStyleSheet(f"color: {layer['color']}; font-size: 14px; font-weight: bold;")
+        color_dot.setObjectName(f"color_dot_{actor_name}")  # store actor_name for later lookup
+
+        # Color picker button
+        color_btn = QPushButton("🎨")
+        color_btn.setFixedSize(24, 20)
+        color_btn.setToolTip("Change point color for this layer")
+        color_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {layer['color']};
+                border: 1px solid #555555;
+                border-radius: 3px;
+                font-size: 10px;
+                padding: 0px;
+            }}
+            QPushButton:hover {{
+                border-color: #888888;
+            }}
+        """)
+        color_btn.clicked.connect(lambda _, an=actor_name, cd=color_dot, cb=color_btn:
+            self._on_gdb_color_pick(an, cd, cb))
 
         name_lbl = QLabel(layer["layer_name"])
         name_lbl.setStyleSheet("color: #ffffff; font-size: 11px; font-weight: bold;")
@@ -2293,6 +2488,7 @@ class TreeVisualizerGUI(QMainWindow):
 
         top.addWidget(vis_cb)
         top.addWidget(color_dot)
+        top.addWidget(color_btn)
         top.addWidget(name_lbl, 1)
         top.addWidget(feat_lbl)
         top.addWidget(remove_btn)
@@ -2326,6 +2522,7 @@ class TreeVisualizerGUI(QMainWindow):
                         name=an,
                         reset_camera=False
                     )
+                    self._set_actor_pickable(an, self.gdb_pick_mode)
                     self.plotter.update()
                 except Exception:
                     pass
@@ -2335,6 +2532,82 @@ class TreeVisualizerGUI(QMainWindow):
         size_row.addWidget(size_slider, 1)
         size_row.addWidget(size_val_lbl)
         row_layout.addLayout(size_row)
+
+        # ── Label field row ─────────────────────────────────────────
+        label_row = QHBoxLayout()
+        label_row.setSpacing(6)
+
+        label_field_lbl = QLabel("Label:")
+        label_field_lbl.setStyleSheet("color: #bbbbbb; font-size: 10px;")
+        label_field_lbl.setFixedWidth(35)
+
+        # Build the combo with GDF column names (excluding geometry column)
+        gdf = layer.get("gdf")
+        label_combo = QComboBox()
+        label_combo.setStyleSheet("QComboBox { font-size: 10px; padding: 2px; }")
+        label_combo.addItem("None", None)
+        if gdf is not None:
+            try:
+                geom_name = gdf.geometry.name
+            except Exception:
+                geom_name = "geometry"
+            for col in gdf.columns:
+                if col == geom_name:
+                    continue
+                label_combo.addItem(str(col), str(col))
+
+        # Restore previous selection if any
+        saved_field = layer.get("label_field")
+        if saved_field:
+            idx = label_combo.findData(saved_field)
+            if idx >= 0:
+                label_combo.setCurrentIndex(idx)
+
+        # Label visibility toggle
+        label_vis_cb = QCheckBox("Show")
+        label_vis_cb.setChecked(layer.get("label_visible", False))
+        label_vis_cb.setToolTip("Toggle point label visibility for this layer")
+        label_vis_cb.setStyleSheet("QCheckBox { color: #bbbbbb; font-size: 10px; }")
+
+        def on_label_field_change(idx, an=actor_name, combo=label_combo):
+            field = combo.itemData(idx)
+            layer = self.gdb_layers.get(an)
+            if layer is None:
+                return
+            layer["label_field"] = field
+            if field and layer.get("label_visible", False):
+                self._refresh_gdb_labels(an)
+            elif not field:
+                # Remove labels when "None" selected
+                if self.plotter:
+                    try:
+                        self.plotter.remove_actor(f"{an}_labels")
+                        self.plotter.update()
+                    except Exception:
+                        pass
+
+        def on_label_vis_change(state, an=actor_name):
+            layer = self.gdb_layers.get(an)
+            if layer is None:
+                return
+            layer["label_visible"] = (state == 2)
+            if state == 2 and layer.get("label_field"):
+                self._refresh_gdb_labels(an)
+            else:
+                if self.plotter:
+                    try:
+                        self.plotter.remove_actor(f"{an}_labels")
+                        self.plotter.update()
+                    except Exception:
+                        pass
+
+        label_combo.currentIndexChanged.connect(on_label_field_change)
+        label_vis_cb.stateChanged.connect(on_label_vis_change)
+
+        label_row.addWidget(label_field_lbl)
+        label_row.addWidget(label_combo, 1)
+        label_row.addWidget(label_vis_cb)
+        row_layout.addLayout(label_row)
 
         def on_vis_change(checked, an=actor_name):
             self.gdb_layers[an]["visible"] = checked
@@ -2351,12 +2624,21 @@ class TreeVisualizerGUI(QMainWindow):
                         name=an,
                         reset_camera=False
                     )
+                    self._set_actor_pickable(an, self.gdb_pick_mode)
+                    # Restore labels if they were enabled
+                    if li.get("label_visible") and li.get("label_field"):
+                        self._refresh_gdb_labels(an)
                     self.plotter.update()
                 except Exception:
                     pass
             else:
                 try:
                     self.plotter.remove_actor(an)
+                    # Also remove labels when hiding
+                    try:
+                        self.plotter.remove_actor(f"{an}_labels")
+                    except Exception:
+                        pass
                     self.plotter.update()
                 except Exception:
                     pass
@@ -2372,6 +2654,12 @@ class TreeVisualizerGUI(QMainWindow):
         if self.plotter:
             try:
                 self.plotter.remove_actor(actor_name)
+                # Also remove any associated label actor
+                label_actor = f"{actor_name}_labels"
+                try:
+                    self.plotter.remove_actor(label_actor)
+                except Exception:
+                    pass
                 self.plotter.update()
             except Exception:
                 pass
@@ -2380,6 +2668,108 @@ class TreeVisualizerGUI(QMainWindow):
         row_widget.deleteLater()
         if not self.gdb_layers:
             self.gdb_layer_group.setVisible(False)
+
+    def _on_gdb_color_pick(self, actor_name, color_dot_label=None, color_button=None):
+        """Open a color dialog and update the GDB layer's point color."""
+        from PyQt6.QtWidgets import QColorDialog
+        layer = self.gdb_layers.get(actor_name)
+        if layer is None:
+            return
+        current = QColor(layer["color"])
+        new_color = QColorDialog.getColor(current, self, "Pick Point Color")
+        if not new_color.isValid():
+            return  # user cancelled
+
+        hex_color = new_color.name()
+        self._refresh_gdb_layer_color(actor_name, hex_color, color_dot_label)
+        # Update the color button background too
+        if color_button is not None:
+            color_button.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {hex_color};
+                    border: 1px solid #555555;
+                    border-radius: 3px;
+                    font-size: 10px;
+                    padding: 0px;
+                }}
+                QPushButton:hover {{
+                    border-color: #888888;
+                }}
+            """)
+
+    def _refresh_gdb_layer_color(self, actor_name, new_color, color_dot_label=None):
+        """Update a GDB layer's point color in both the data store and the 3D viewer."""
+        layer = self.gdb_layers.get(actor_name)
+        if layer is None:
+            return
+        layer["color"] = new_color
+        layer["color_name"] = new_color  # store hex as name for simplicity
+
+        if color_dot_label is not None:
+            color_dot_label.setStyleSheet(f"color: {new_color}; font-size: 14px; font-weight: bold;")
+
+        if self.plotter and layer.get("visible", True):
+            try:
+                self.plotter.add_points(
+                    pv.PolyData(layer["coords"]),
+                    color=new_color,
+                    point_size=layer["point_size"],
+                    render_points_as_spheres=layer["render_spheres"],
+                    name=actor_name,
+                    reset_camera=False,
+                )
+                self._set_actor_pickable(actor_name, self.gdb_pick_mode)
+                # Re-apply labels with updated actor if they were visible
+                if layer.get("label_visible") and layer.get("label_field"):
+                    self._refresh_gdb_labels(actor_name)
+                self.plotter.update()
+            except Exception as e:
+                self.log_to_console(f"⚠️ Failed to update GDB layer color: {e}")
+
+    def _refresh_gdb_labels(self, actor_name):
+        """Add or update point labels for a GDB layer based on the selected label field."""
+        layer = self.gdb_layers.get(actor_name)
+        if layer is None:
+            return
+        label_field = layer.get("label_field")
+        gdf = layer.get("gdf")
+        coords = layer.get("coords")
+        label_actor = f"{actor_name}_labels"
+
+        # Remove existing labels
+        if self.plotter:
+            try:
+                self.plotter.remove_actor(label_actor)
+            except Exception:
+                pass
+
+        if not label_field or gdf is None or coords is None:
+            return
+        if not layer.get("label_visible", False):
+            return
+
+        # Build label texts from the selected field
+        try:
+            if label_field not in gdf.columns:
+                self.log_to_console(f"⚠️ Label field '{label_field}' not found in GDB layer attributes")
+                return
+            values = gdf[label_field].fillna("").astype(str).to_numpy()
+            labels = [str(v) for v in values]
+
+            if self.plotter:
+                self.plotter.add_point_labels(
+                    pv.PolyData(coords),
+                    labels,
+                    font_size=9,
+                    text_color="white",
+                    point_size=2,
+                    always_visible=True,
+                    name=label_actor,
+                )
+                self.plotter.update()
+            self.log_to_console(f"🏷️  {len(labels)} labels applied to '{layer.get('layer_name')}' (field: {label_field})")
+        except Exception as e:
+            self.log_to_console(f"⚠️ Failed to add GDB labels: {e}")
 
 
     def update_tree_colors(self, color_field, preserve_camera=True):
@@ -2408,7 +2798,7 @@ class TreeVisualizerGUI(QMainWindow):
                 self.plotter.clear()
                 self._restore_gdb_layers()
                 point_cloud = pv.PolyData(self.current_tree_points)
-                self.plotter.add_points(point_cloud, color='#4CAF50', point_size=2, render_points_as_spheres=False, reset_camera=False)
+                self.plotter.add_points(point_cloud, color='#4CAF50', point_size=2, render_points_as_spheres=False, reset_camera=False, name='tree_point_cloud')
             elif color_field == "RGB (red, green, blue)":
                 # Color by RGB values
                 print(f"Coloring by RGB values")
@@ -2456,7 +2846,7 @@ class TreeVisualizerGUI(QMainWindow):
                     point_cloud['rgb'] = rgb_colors
                     
                     # Use direct RGB coloring (rgb=True uses the 'rgb' scalar field)
-                    self.plotter.add_points(point_cloud, scalars='rgb', rgb=True, point_size=2, render_points_as_spheres=False, reset_camera=False)
+                    self.plotter.add_points(point_cloud, scalars='rgb', rgb=True, point_size=2, render_points_as_spheres=False, reset_camera=False, name='tree_point_cloud')
                     print(f"RGB coloring applied to {len(self.current_tree_points)} points")
                 else:
                     print(f"Warning: RGB fields not found. Available fields: {available_fields}")
@@ -2496,14 +2886,17 @@ class TreeVisualizerGUI(QMainWindow):
                     if color_field == 'itc':
                         # Use a colormap with 9 distinct colors for ITC
                         self.plotter.add_points(point_cloud, scalars=color_values, point_size=2, render_points_as_spheres=False, 
-                                              cmap='tab10', n_colors=9, clim=[0, 8], reset_camera=False)
+                                              cmap='tab10', n_colors=9, clim=[0, 8], reset_camera=False, name='tree_point_cloud')
                     else:
-                        self.plotter.add_points(point_cloud, scalars=color_values, point_size=2, render_points_as_spheres=False, cmap='cividis', reset_camera=False)
+                        self.plotter.add_points(point_cloud, scalars=color_values, point_size=2, render_points_as_spheres=False, cmap='cividis', reset_camera=False, name='tree_point_cloud')
                         
                 except Exception as e:
                     print(f"Error coloring by field '{color_field}': {str(e)}")
                     QMessageBox.warning(self, "Warning", f"Failed to color by field '{color_field}': {str(e)}")
                     return
+
+            # Apply current pick mode (tree vs GDB) to the freshly added actors
+            self._apply_pick_mode()
 
             # Restore camera position and zoom level if preserving view, otherwise reset to frame tree
             if preserve_camera and camera_state is not None:
@@ -2746,7 +3139,8 @@ class TreeVisualizerGUI(QMainWindow):
                 ]
                 bounding_box = pv.Cube(bounds=bounds)
                 self.plotter.add_mesh(bounding_box, color='black', style='wireframe', line_width=2,
-                                    label='Tree Bounding Box')
+                                    name='tree_bounding_box', label='Tree Bounding Box')
+                self._set_actor_pickable('tree_bounding_box', False)
                 # Display bounding box height as overlay text and a 3D label at the top center
                 try:
                     bottom_z = bounds[4]
@@ -2775,6 +3169,7 @@ class TreeVisualizerGUI(QMainWindow):
                     dbh_line = pv.Line(dbh_line_start, dbh_line_end)
                     self.plotter.add_mesh(dbh_line, color='orange', line_width=3,
                                         name='dbh_marker_line', label=f'DBH @ {dbh_ref_h:.1f}m')
+                    self._set_actor_pickable('dbh_marker_line', False)
                     # Label at the midpoint of the DBH line
                     dbh_mid = ((bounds[0] + bounds[1]) / 2.0, mid_y, dbh_z)
                     self.plotter.add_point_labels([dbh_mid], [f"DBH ({dbh_ref_h:.1f}m)"],
@@ -3825,6 +4220,10 @@ class TreeVisualizerGUI(QMainWindow):
 
     def on_point_picked(self, picked_info):
         """Callback for point picking - shows ITC value and trunk ID of picked point."""
+        if getattr(self, 'gdb_pick_mode', False):
+            self._handle_gdb_pick(picked_info)
+            return
+
         if self.current_tree_points is None or self.current_itc_values is None:
             self.log_to_console("Warning: No tree data available for point picking")
             return
@@ -5005,6 +5404,10 @@ class TreeVisualizerGUI(QMainWindow):
                 self.plotter.suppress_rendering = False
                 self.plotter.render()
 
+            # Add section info labels showing trunk/branch/section for each section
+            self._add_section_info_labels()
+            self._log_section_diameter_breakdown()
+
             # Also log overall totals
             overall_total = sum(t['total_volume'] for t in self.trunk_volume_summary.values())
             self.log_to_console(f"📊 Overall tree total (sum of trunks): {overall_total:.4f} m³")
@@ -5071,6 +5474,10 @@ class TreeVisualizerGUI(QMainWindow):
                 self.plotter.suppress_rendering = False
                 self.plotter.render()
 
+            # Add section info labels showing trunk/branch/section for each section
+            self._add_section_info_labels()
+            self._log_section_diameter_breakdown()
+
             # Perform global ground proximity check (allow in branch mode too)
             # This enables using globally fitted/extrapolated circles as DBH references
             try:
@@ -5136,6 +5543,7 @@ class TreeVisualizerGUI(QMainWindow):
                 
                 section_data = {
                     'section_id': section['section_id'],
+                    'trunk_id': section.get('trunk_id'),
                     'branch_id': section.get('branch_id'),
                     'volume': section['volume'],
                     'point_color': section['point_color'],
@@ -6500,6 +6908,7 @@ class TreeVisualizerGUI(QMainWindow):
 
             # ── Merge overlapping branches within each trunk ──
             point_to_branch, merge_report = self._merge_overlapping_branches(point_to_branch)
+            self.branch_assignment = point_to_branch  # update with merged branch IDs
             self.log_to_console(merge_report)
             
             # Enable selection and volume tools now that branch detection exists
@@ -8176,7 +8585,7 @@ Important:
             # Remove existing accumulated sections for this tree so each successful run is fresh
             try:
                 prev_count = len(self.accumulated_volume_sections)
-                self.accumulated_volume_sections = [s for s in self.accumulated_volume_sections if s.get('tree_id') != section_tree_id]
+                self.accumulated_volume_sections = [s for s in self.accumulated_volume_sections if str(s.get('tree_id', '')) != str(section_tree_id)]
                 removed = prev_count - len(self.accumulated_volume_sections)
                 if removed > 0:
                     self.log_to_console(f"🧹 Cleared {removed} previous section(s) for tree {section_tree_id} to start a fresh volume calculation")
@@ -8394,7 +8803,14 @@ Important:
                 dbh_h = getattr(self, 'dbh_reference_height', 1.3)
                 if is_branch_mode:
                     if trunk_dbh_summary:
-                        dbh_lines = [f"T{tid}: {dbh:.1f} cm" for tid, dbh in sorted(trunk_dbh_summary.items())]
+                        dbh_lines = []
+                        for key, dbh in sorted(trunk_dbh_summary.items()):
+                            parts = str(key).rsplit('_', 1)
+                            if len(parts) == 2:
+                                tree_id, trunk_id = parts[0], parts[1]
+                                dbh_lines.append(f"Tree{tree_id}/T{trunk_id}: {dbh:.1f} cm")
+                            else:
+                                dbh_lines.append(f"T{key}: {dbh:.1f} cm")
                         dbh_text = "\nDBH by trunk: " + "; ".join(dbh_lines)
                     else:
                         dbh_text = "\nDBH by trunk: N/A"
@@ -8574,6 +8990,16 @@ Important:
 
         return trunk_summary, rows, total_volume
 
+    def _to_local_branch_id(self, global_branch_id):
+        """Convert global branch ID to local (per-trunk) branch ID using branch_meta."""
+        if global_branch_id is None or not hasattr(self, 'branch_meta') or not self.branch_meta:
+            return global_branch_id
+        try:
+            meta = self.branch_meta.get(int(global_branch_id), {})
+            return meta.get('local_id', global_branch_id)
+        except (ValueError, TypeError):
+            return global_branch_id
+
     def _build_trunk_dbh_summary_table(self):
         """Build trunk-level DBH totals using section-fitted circles (same pipeline as volume sections)."""
         trunk_dbh: Dict[int, Dict[str, Any]] = {}
@@ -8583,77 +9009,125 @@ Important:
             tree_base_z = float(np.min(self.current_tree_points[:, 2]))
             dbh_target_z = tree_base_z + target_height
         else:
+            tree_base_z = 0.0
             dbh_target_z = target_height
 
-        # Default method: use section-derived circles for each trunk.
-        # Priority per trunk: exact section DBH circle at target height, else closest section average circle.
+        self.log_to_console(f"🔍 DBH DEBUG: target_height={target_height:.2f}m, tree_base_z={tree_base_z:.2f}m, dbh_target_z={dbh_target_z:.2f}m")
+        self.log_to_console(f"🔍 DBH DEBUG: scanning {len(self.accumulated_volume_sections)} accumulated section(s)")
+
         for section in self.accumulated_volume_sections:
             trunk_id = section.get('trunk_id', None)
             if trunk_id is None:
                 continue
 
             circle_data = section.get('circle_data') or {}
-            dbh_at_1_3m = circle_data.get('dbh_at_1_3m')
-            dbh_center = circle_data.get('dbh_center_at_1_3m')
-            dbh_target_z_section = circle_data.get('dbh_target_z')
             section_min_z = circle_data.get('min_z')
             section_max_z = circle_data.get('max_z')
             avg_radius = circle_data.get('avg_radius')
             avg_center = circle_data.get('avg_center')
+            tree_id = section.get('tree_id', '?')
+            branch_id = section.get('branch_id', None)
+            sec_id = section.get('section_id', '?')
+
+            avg_r_str = f"{avg_radius:.3f}" if avg_radius is not None else "None"
+            z_min_str = f"{section_min_z:.2f}" if section_min_z is not None else "?"
+            z_max_str = f"{section_max_z:.2f}" if section_max_z is not None else "?"
+
+            local_branch = self._to_local_branch_id(branch_id)
+            global_str = f"(global={branch_id})" if branch_id is not None and branch_id != local_branch else ""
+            self.log_to_console(
+                f"🔍 DBH DEBUG: Section sec={sec_id} tree={tree_id} trunk={trunk_id} branch={local_branch}{global_str} "
+                f"Z=[{z_min_str}, {z_max_str}] avg_R={avg_r_str}"
+            )
 
             candidate = None
 
-            # Candidate 1: section average fitted circle (main method; this matches the red section circle).
-            if avg_radius is not None and avg_center is not None and section_min_z is not None and section_max_z is not None:
-                avg_radius = float(avg_radius)
-                if avg_radius > 0:
-                    section_min_z = float(section_min_z)
-                    section_max_z = float(section_max_z)
-                    if section_min_z <= dbh_target_z <= section_max_z:
-                        score = 0.0
-                    else:
-                        score = min(abs(dbh_target_z - section_min_z), abs(dbh_target_z - section_max_z))
+            if (avg_radius is not None and avg_center is not None and len(avg_center) >= 2
+                    and section_min_z is not None and section_max_z is not None):
+                if section_min_z <= dbh_target_z <= section_max_z:
+                    try:
+                        _sec_num = int(str(sec_id))
+                    except (ValueError, TypeError):
+                        _sec_num = 0
 
-                    z_for_display = min(max(dbh_target_z, section_min_z), section_max_z)
+                    # Use XY of the individual circle closest to dbh_target_z
+                    # so the blue circle aligns with the red circle at that height.
+                    circles = circle_data.get('circles', [])
+                    best_xy = avg_center  # fallback to section average XY
+                    if circles and len(circles) > 0:
+                        best_dist = float('inf')
+                        for center, _radius in circles:
+                            dist = abs(center[2] - dbh_target_z)
+                            if dist < best_dist:
+                                best_dist = dist
+                                best_xy = [center[0], center[1]]
+
                     candidate = {
-                        'dbh_cm': float(avg_radius * 2.0 * 100.0),
-                        'radius_m': avg_radius,
-                        'center_xyz': [float(avg_center[0]), float(avg_center[1]), float(z_for_display)],
-                        'score': float(score),
+                        'tree_id': str(tree_id),
+                        'dbh_cm': float(avg_radius) * 2.0 * 100.0,
+                        'radius_m': float(avg_radius),
+                        'center_xyz': [float(best_xy[0]), float(best_xy[1]), float(dbh_target_z)],
+                        'score': 0.0,
                         'priority': 0,
-                        'section_id': f"section_avg@{section.get('section_id')}",
+                        'section_id': f"section_avg@{sec_id}",
+                        'branch_id': self._to_local_branch_id(branch_id),
                         'dbh_target_z': float(dbh_target_z),
+                        '_sec_num': int(_sec_num),
                     }
-
-            # Candidate 2: exact DBH circle from this section, only if we need a fallback.
-            if candidate is None and dbh_at_1_3m is not None and dbh_center is not None:
-                candidate = {
-                    'dbh_cm': float(dbh_at_1_3m) * 100.0,
-                    'radius_m': float(dbh_at_1_3m) / 2.0,
-                    'center_xyz': [float(dbh_center[0]), float(dbh_center[1]), float(dbh_center[2])],
-                    'score': 0.0,
-                    'priority': 1,
-                    'section_id': f"section_dbh@{section.get('section_id')}",
-                    'dbh_target_z': float(dbh_target_z_section) if dbh_target_z_section is not None else float(dbh_target_z),
-                }
+                    self.log_to_console(
+                        f"   ✅ QUALIFIES: Z range contains dbh_target_z → candidate (priority=0, sec_num={_sec_num})"
+                    )
+                else:
+                    self.log_to_console(
+                        f"   ❌ SKIPPED: Z range [{z_min_str}, {z_max_str}] does NOT contain dbh_target_z={dbh_target_z:.2f}"
+                    )
+            elif avg_radius is None:
+                self.log_to_console(f"   ❌ SKIPPED: no avg_radius")
+            else:
+                self.log_to_console(f"   ❌ SKIPPED: missing avg_center or Z range")
 
             if candidate is not None:
-                rec = trunk_dbh.get(int(trunk_id))
-                if rec is None or (candidate['priority'], candidate['score']) < (rec['priority'], rec['score']):
-                    trunk_dbh[int(trunk_id)] = candidate
+                tree_id_str = str(tree_id)
+                composite_key = f"{tree_id_str}_{int(trunk_id)}"
+                rec = trunk_dbh.get(composite_key)
+                if rec is None:
+                    trunk_dbh[composite_key] = candidate
+                    self.log_to_console(
+                        f"   🏆 SELECTED for {composite_key}: branch={branch_id}, DBH={candidate['dbh_cm']:.1f}cm, sec_num={candidate['_sec_num']}"
+                    )
+                else:
+                    new_sort = (candidate['priority'], -candidate['_sec_num'], candidate['score'])
+                    old_sort = (rec['priority'], -rec.get('_sec_num', 0), rec['score'])
+                    if new_sort < old_sort:
+                        trunk_dbh[composite_key] = candidate
+                        self.log_to_console(
+                            f"   🔄 REPLACED {composite_key}: old branch={rec.get('branch_id')} sec_num={rec.get('_sec_num')} → new branch={branch_id} sec_num={candidate['_sec_num']}"
+                        )
+                    else:
+                        self.log_to_console(
+                            f"   ⏩ IGNORED for {composite_key}: existing has better sort (old_sec_num={rec.get('_sec_num')}, new_sec_num={candidate['_sec_num']})"
+                        )
 
         # No trunk-point refit fallback here by design:
         # DBH should come from section-fitted circles used by the same branch/volume pipeline.
 
-        trunk_dbh_values = {tid: rec['dbh_cm'] for tid, rec in trunk_dbh.items()}
+        trunk_dbh_values = {key: rec['dbh_cm'] for key, rec in trunk_dbh.items()}
+        self.log_to_console(f"🔍 DBH DEBUG: final candidates = {list(trunk_dbh.keys())}")
+        for key, rec in trunk_dbh.items():
+            self.log_to_console(f"   {key}: branch={rec.get('branch_id')} DBH={rec['dbh_cm']:.1f}cm source={rec.get('section_id')} sec_num={rec.get('_sec_num', '?')}")
         rows = []
-        header = f"{'Trunk':<8} {'DBH_cm':>12} {'Source':>24}"
+        header = f"{'Tree/Trunk':<16} {'DBH_cm':>12} {'Source':>24}"
         rows.append(header)
         rows.append("-" * len(header))
 
-        for trunk_id in sorted(trunk_dbh.keys()):
-            rec = trunk_dbh[trunk_id]
-            rows.append(f"{trunk_id:<8} {rec['dbh_cm']:12.1f} {str(rec['section_id']):>24}")
+        for composite_key in sorted(trunk_dbh.keys()):
+            rec = trunk_dbh[composite_key]
+            tree_id = rec.get('tree_id', '?')
+            # Parse trunk_id from composite key for display
+            parts = composite_key.rsplit('_', 1)
+            trunk_display = parts[-1] if len(parts) == 2 else str(composite_key)
+            label = f"Tree{tree_id}/T{trunk_display}"
+            rows.append(f"{label:<16} {rec['dbh_cm']:12.1f} {str(rec['section_id']):>24}")
 
         return trunk_dbh_values, rows, trunk_dbh
 
@@ -8695,18 +9169,41 @@ Important:
 
         return None
 
-    def _add_trunk_dbh_overlays(self, trunk_dbh_details: Dict[int, Dict[str, Any]]):
+    def _add_trunk_dbh_overlays(self, trunk_dbh_details: Dict[str, Dict[str, Any]]):
         """Render trunk-level DBH circles and labels in blue for all trunks with DBH estimates."""
         if self.plotter is None:
             return
 
-        for trunk_id, rec in trunk_dbh_details.items():
+        for composite_key, rec in trunk_dbh_details.items():
             center = rec.get('center_xyz')
             radius_m = rec.get('radius_m')
             dbh_cm = rec.get('dbh_cm')
+            tree_id = rec.get('tree_id', '?')
+            section_id = rec.get('section_id', '?')
+            branch_id = rec.get('branch_id', None)
 
             if center is None or radius_m is None or dbh_cm is None:
                 continue
+
+            # Parse trunk_id from composite key for display
+            parts = composite_key.rsplit('_', 1)
+            trunk_display = parts[-1] if len(parts) == 2 else str(composite_key)
+
+            # Parse section number from section_id (e.g., "section_avg@5" → "5")
+            sec_display = ""
+            if section_id and section_id != '?':
+                import re as _re
+                m = _re.search(r'@(\d+)', str(section_id))
+                if m:
+                    sec_display = f"/S{m.group(1)}"
+                else:
+                    sec_display = f"/{section_id}"
+
+            # Build source info showing which branch/section was used for DBH
+            source_info = ""
+            if branch_id is not None:
+                source_info += f"/B{branch_id}"
+            source_info += sec_display
 
             try:
                 circle = pv.Circle(radius=float(radius_m), resolution=64)
@@ -8717,22 +9214,154 @@ Important:
                     opacity=0.9,
                     line_width=4,
                     style='wireframe',
-                    name=f'trunk_dbh_circle_{trunk_id}',
-                    label=f'Trunk {trunk_id} DBH: {float(dbh_cm):.1f}cm'
+                    name=f'trunk_dbh_circle_{tree_id}_{trunk_display}',
+                    label=f'Tree {tree_id} / Trunk {trunk_display}{source_info} DBH: {float(dbh_cm):.1f}cm'
                 )
 
                 label_pos = [float(center[0] + float(radius_m) * 1.25), float(center[1]), float(center[2])]
                 self.plotter.add_point_labels(
                     [label_pos],
-                    [f'T{trunk_id}: {float(dbh_cm):.1f}cm'],
+                    [f'T{tree_id}/T{trunk_display}{source_info}: {float(dbh_cm):.1f}cm'],
                     font_size=12,
                     text_color='blue',
                     point_size=0,
                     always_visible=True,
-                    name=f'trunk_dbh_label_{trunk_id}'
+                    name=f'trunk_dbh_label_{tree_id}_{trunk_display}'
                 )
             except Exception as e:
-                self.log_to_console(f"⚠️ Failed to draw blue trunk DBH overlay for trunk {trunk_id}: {e}")
+                self.log_to_console(f"⚠️ Failed to draw blue trunk DBH overlay for tree {tree_id} trunk {trunk_display}: {e}")
+
+    def _log_section_diameter_breakdown(self):
+        """Log a per-section diameter breakdown to the console (only when ≤3 trees loaded)."""
+        if not self.accumulated_volume_sections:
+            return
+        unique_trees = set(str(s.get('tree_id', '')) for s in self.accumulated_volume_sections) - {''}
+        if len(unique_trees) > 3:
+            return
+
+        self.log_to_console("=" * 60)
+        self.log_to_console("📐 SECTION DIAMETER BREAKDOWN (section avg radius × 2)")
+        self.log_to_console("=" * 60)
+
+        # Group by tree → trunk → branch (deduplicate by (tree_id, section_id))
+        tree_groups: dict = {}
+        seen = set()
+        for s in self.accumulated_volume_sections:
+            tid = str(s.get('tree_id', '?'))
+            sid = s.get('section_id', '?')
+            dedup_key = (tid, str(sid))
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            tid = str(s.get('tree_id', '?'))
+            trid = s.get('trunk_id')
+            bid = s.get('branch_id')
+            sid = s.get('section_id', '?')
+            cd = s.get('circle_data') or {}
+            ar = cd.get('avg_radius')
+            diam_cm = None if ar is None else float(ar) * 2.0 * 100.0
+            zmin = cd.get('min_z')
+            zmax = cd.get('max_z')
+            tree_groups.setdefault(tid, {}).setdefault(trid, {}).setdefault(bid, []).append({
+                'section': sid,
+                'diam_cm': diam_cm,
+                'zmin': zmin,
+                'zmax': zmax,
+            })
+
+        for tree_id in sorted(tree_groups):
+            self.log_to_console(f"\n🌳 Tree {tree_id}")
+            for trunk_id in sorted(tree_groups[tree_id], key=lambda x: (isinstance(x, str), x if x is not None else -1)):
+                branches = tree_groups[tree_id][trunk_id]
+                self.log_to_console(f"  └─ Trunk {trunk_id}")
+                for branch_id in sorted(branches, key=lambda x: (isinstance(x, str), x if x is not None else -1)):
+                    sections = branches[branch_id]
+                    branch_label = f"B{branch_id}" if branch_id is not None else "(no branch)"
+                    # Compute branch average diameter across its sections
+                    branch_diams = [s['diam_cm'] for s in sections if s['diam_cm'] is not None]
+                    branch_avg = np.mean(branch_diams) if branch_diams else None
+                    avg_str = f" → branch avg: {branch_avg:.1f} cm" if branch_avg is not None else ""
+                    self.log_to_console(f"     ├─ {branch_label}{avg_str}")
+                    for s in sections:
+                        d_str = f"{s['diam_cm']:.1f} cm" if s['diam_cm'] is not None else "N/A"
+                        z_str = f"Z=[{s['zmin']:.2f}, {s['zmax']:.2f}]" if s['zmin'] is not None and s['zmax'] is not None else ""
+                        self.log_to_console(f"     │   S{s['section']}: {d_str}  {z_str}")
+        self.log_to_console("=" * 60)
+
+    def _add_section_info_labels(self):
+        """Add 3D labels for each accumulated volume section showing trunk/branch/section info.
+        
+        Labels are placed at the average center XY with Z at the section's min_z,
+        helping identify which branch and section each colored circle group belongs to.
+        
+        Skip label rendering when more than 3 trees are loaded to keep the UI responsive.
+        """
+        if self.plotter is None:
+            return
+
+        # For large datasets (>3 trees), skip detailed section labels to keep UI responsive.
+        # The trunk DBH summary table and blue DBH circles are still shown.
+        unique_tree_ids = set(str(s.get('tree_id', '')) for s in self.accumulated_volume_sections) - {''}
+        if len(unique_tree_ids) > 3:
+            self.log_to_console(f"⏩ Skipping section labels: {len(unique_tree_ids)} trees loaded (>3 threshold)")
+            return
+
+        seen = set()
+        for section in self.accumulated_volume_sections:
+            dedup_key = (str(section.get('tree_id', '?')), str(section.get('section_id', '?')))
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+
+            circle_data = section.get('circle_data') or {}
+            avg_center = circle_data.get('avg_center')
+            if avg_center is None or len(avg_center) < 2:
+                continue
+
+            min_z = circle_data.get('min_z', 0.0)
+            tree_id = section.get('tree_id', '?')
+            trunk_id = section.get('trunk_id', None)
+            branch_id = section.get('branch_id', None)
+            sec_id = section.get('section_id', '?')
+
+            # Build label: "T{tree}/Tr{trunk}/B{branch}/S{section}"
+            parts = [f"T{tree_id}"]
+            if trunk_id is not None:
+                try:
+                    parts.append(f"Tr{int(trunk_id)}")
+                except (ValueError, TypeError):
+                    parts.append(f"Tr{trunk_id}")
+            if branch_id is not None:
+                try:
+                    parts.append(f"B{int(branch_id)}")
+                except (ValueError, TypeError):
+                    parts.append(f"B{branch_id}")
+            parts.append(f"S{sec_id}")
+            # Append diameter value if available
+            avg_r = circle_data.get('avg_radius')
+            if avg_r is not None and avg_r > 0:
+                diam_cm = float(avg_r) * 2.0 * 100.0
+                label_text = f"{'/'.join(parts)}: {diam_cm:.1f}cm"
+            else:
+                label_text = "/".join(parts)
+
+            label_pos = [float(avg_center[0]), float(avg_center[1]), float(min_z)]
+            label_name = f'section_info_label_{tree_id}_{sec_id}'
+
+            self.log_to_console(f"🏷️  Section label: {label_text} at Z={min_z:.2f}")
+
+            try:
+                self.plotter.add_point_labels(
+                    [label_pos],
+                    [label_text],
+                    font_size=9,
+                    text_color='white',
+                    point_size=5,
+                    always_visible=True,
+                    name=label_name
+                )
+            except Exception as e:
+                self.log_to_console(f"⚠️ Failed to add section label for S{sec_id}: {e}")
 
     def clear_accumulated_volume(self):
         """
@@ -8760,7 +9389,8 @@ Important:
                     if ('volume' in actor_name.lower() or 
                         'dbh_' in actor_name.lower() or 
                         'trajectory' in actor_name.lower() or 
-                        'circle' in actor_name.lower()):
+                        'circle' in actor_name.lower() or
+                        'section_info_label' in actor_name.lower()):
                         actors_to_remove.append(actor_name)
                 
                 for actor_name in actors_to_remove:
@@ -8827,6 +9457,7 @@ Important:
                 
                 section_data = {
                     'section_id': section['section_id'],
+                    'trunk_id': section.get('trunk_id'),
                     'branch_id': section.get('branch_id'),
                     'volume': section['volume'],
                     'point_color': section['point_color'],
@@ -9057,6 +9688,7 @@ Important:
                             section_info = {
                                 'tree_id': tree_id,
                                 'section_id': section_id,
+                                'trunk_id': section_data.get('trunk_id'),
                                 'branch_id': section_data.get('branch_id'),
                                 'volume': section_data['volume'],
                                 'point_color': section_data['point_color'],
@@ -9076,6 +9708,21 @@ Important:
                 except Exception as e:
                     self.log_to_console(f"⚠️ Error loading {tree_file}: {e}")
                     continue
+
+            # Deduplicate loaded sections by (tree_id, section_id) — the JSON
+            # may contain duplicates from older save logic.
+            _seen = set()
+            _deduped = []
+            for _s in self.accumulated_volume_sections:
+                _key = (str(_s.get('tree_id', '')), str(_s.get('section_id', '')))
+                if _key not in _seen:
+                    _seen.add(_key)
+                    _deduped.append(_s)
+            _dup_count = len(self.accumulated_volume_sections) - len(_deduped)
+            if _dup_count > 0:
+                self.log_to_console(f"🧹 Removed {_dup_count} duplicate section(s) from loaded data")
+                self.accumulated_volume_sections = _deduped
+                total_sections = len(self.accumulated_volume_sections)
 
             # Track which trees have volume data for UI coloring.
             # Base this on ALL files present in the folder (not just the loaded
@@ -9124,7 +9771,95 @@ Important:
                 self.plotter.suppress_rendering = False
                 self.plotter.render()
             self.log_to_console(f"✅ Visualization restoration complete")
-            
+
+            # --- Restore trunk DBH overlays and volume info text (same as calculate_volume_from_selection) ---
+            # Determine if any loaded section is branch mode (has branch_id)
+            has_branch_mode = any(s.get('branch_id') is not None for s in self.accumulated_volume_sections)
+
+            # Build trunk volume summary and log to console
+            trunk_summary, trunk_summary_lines, trunk_total_volume = self._build_trunk_volume_summary_table()
+            trunk_dbh_summary, trunk_dbh_lines, trunk_dbh_details = self._build_trunk_dbh_summary_table() if has_branch_mode else ({}, [], {})
+
+            if has_branch_mode and trunk_dbh_details:
+                self._add_trunk_dbh_overlays(trunk_dbh_details)
+
+            # Add section info labels showing trunk/branch/section for each loaded section
+            self._add_section_info_labels()
+            self._log_section_diameter_breakdown()
+
+            if trunk_summary:
+                self.log_to_console(f"📦 Total trunks used for volume: {len(trunk_summary)}")
+                self.log_to_console("📋 Trunk volume summary:")
+                for line in trunk_summary_lines:
+                    self.log_to_console(line)
+                    print(line)
+                self.log_to_console(f"📊 Combined trunk volume: {trunk_total_volume:.4f} m³")
+                print(f"Combined trunk volume: {trunk_total_volume:.4f} m³")
+            else:
+                self.log_to_console("📦 Total trunks used for volume: 0")
+                self.log_to_console("📋 Trunk volume summary: none")
+                print("Total trunks used for volume: 0")
+                print("Trunk volume summary: none")
+
+            if has_branch_mode:
+                if trunk_dbh_summary:
+                    dbh_h = getattr(self, 'dbh_reference_height', 1.3)
+                    dbh_msg = f"📐 Trunk DBH summary ({dbh_h:.1f}m above base):"
+                    self.log_to_console(dbh_msg)
+                    for line in trunk_dbh_lines:
+                        self.log_to_console(line)
+                        print(line)
+                else:
+                    dbh_h = getattr(self, 'dbh_reference_height', 1.3)
+                    dbh_msg = f"📐 Trunk DBH summary ({dbh_h:.1f}m above base): none"
+                    self.log_to_console(dbh_msg)
+
+            # Build volume info text overlay on the 3D plotter
+            if self.plotter is not None:
+                total_pts = sum(len(s.get('points', [])) for s in self.accumulated_volume_sections)
+                mode_text = "Mode: Branch-wise" if has_branch_mode else "Mode: Standard"
+
+                trunk_summary_overlay = ""
+                if trunk_summary:
+                    compact_rows = []
+                    for tid in sorted(trunk_summary.keys()):
+                        data = trunk_summary[tid]
+                        compact_rows.append(f"T{tid}: {data['total_volume']:.4f} m³ / {data['num_branches']} branches")
+                    trunk_summary_overlay = "\nTrunks Used: " + str(len(trunk_summary)) + "\n" + "\n".join(compact_rows)
+
+                dbh_h = getattr(self, 'dbh_reference_height', 1.3)
+                if has_branch_mode and trunk_dbh_summary:
+                    dbh_lines = []
+                    for key, dbh in sorted(trunk_dbh_summary.items()):
+                        parts = str(key).rsplit('_', 1)
+                        if len(parts) == 2:
+                            tree_id, trunk_id = parts[0], parts[1]
+                            dbh_lines.append(f"Tree{tree_id}/T{trunk_id}: {dbh:.1f} cm")
+                        else:
+                            dbh_lines.append(f"T{key}: {dbh:.1f} cm")
+                    dbh_text = "\nDBH by trunk: " + "; ".join(dbh_lines)
+                else:
+                    dbh_text = "\nDBH: N/A"
+
+                info_text = (f"Loaded Volume Calculation\n"
+                            f"{mode_text}\n"
+                            f"Sections: {total_sections}\n"
+                            f"Total Points: {total_pts}\n"
+                            f"Combined Trunk Volume: {total_volume:.4f} m³\n"
+                            f"Trunks Used: {len(trunk_summary) if trunk_summary else 0}"
+                            f"{trunk_summary_overlay}"
+                            f"{dbh_text}\n"
+                            f"Source: {os.path.basename(folder)}")
+
+                try:
+                    self.plotter.remove_actor('volume_info_text')
+                except:
+                    pass
+
+                self.plotter.add_text(info_text, position='upper_left', font_size=10, color='#FFFFFF',
+                                    name='volume_info_text')
+                self.plotter.update()
+
             QMessageBox.information(self, "Load Successful",
                                   f"Volume data loaded from {len(tree_files)} files in {folder}\n"
                                   f"Trees: {total_trees}\n"
