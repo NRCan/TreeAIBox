@@ -1029,6 +1029,66 @@ class TreeVisualizerGUI(QMainWindow):
         except Exception:
             pass
 
+    def _start_volume_load_profile(self):
+        """Start a timed Load Data profile log on disk."""
+        import time
+        from datetime import datetime
+
+        log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'analysis_log')
+        os.makedirs(log_dir, exist_ok=True)
+        stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        path = os.path.join(log_dir, f'volume_load_profile_{stamp}.log')
+        self._volume_load_profile_path = path
+        self._volume_load_profile_t0 = time.perf_counter()
+        self._volume_load_profile_last = self._volume_load_profile_t0
+        header = (
+            f"Volume Load Data profile started {datetime.now().isoformat(timespec='seconds')}\n"
+            f"Log file: {path}\n"
+        )
+        try:
+            with open(path, 'w', encoding='utf-8') as handle:
+                handle.write(header)
+                handle.flush()
+        except Exception as exc:
+            self._volume_load_profile_path = None
+            self.log_to_console(f"⚠️ Could not create load-data profile log: {exc}")
+            return None
+        self.log_to_console(f"📝 Load Data profile log: {path}")
+        return path
+
+    def _profile_volume_load(self, step_name, extra=''):
+        """Record elapsed time for one Load Data step to the profile log and console."""
+        import time
+        from datetime import datetime
+
+        path = getattr(self, '_volume_load_profile_path', None)
+        if not path:
+            return
+        now = time.perf_counter()
+        dt = now - getattr(self, '_volume_load_profile_last', now)
+        total = now - getattr(self, '_volume_load_profile_t0', now)
+        self._volume_load_profile_last = now
+        extra_text = f"  | {extra}" if extra else ""
+        line = (
+            f"{datetime.now().strftime('%H:%M:%S.%f')[:-3]}  "
+            f"+{dt:8.3f}s  total={total:8.3f}s  {step_name}{extra_text}\n"
+        )
+        try:
+            with open(path, 'a', encoding='utf-8') as handle:
+                handle.write(line)
+                handle.flush()
+        except Exception:
+            pass
+        self.log_to_console(f"⏱ {step_name}: {dt:.3f}s (total {total:.3f}s){extra_text}")
+
+    def _finish_volume_load_profile(self, status='done'):
+        """Close the Load Data profile log with a final status line."""
+        path = getattr(self, '_volume_load_profile_path', None)
+        if not path:
+            return
+        self._profile_volume_load(f'LOAD_DATA_{status.upper()}')
+        self._volume_load_profile_path = None
+
     def apply_stylesheet(self):
         """Apply modern dark theme stylesheet."""
         self.setStyleSheet("""
@@ -2285,6 +2345,7 @@ class TreeVisualizerGUI(QMainWindow):
             self.plotter.enable_point_picking(callback=self.on_point_picked, show_message=False)
         except Exception:
             pass
+        self._set_volume_overlay_actors_unpickable()
 
     def _set_actor_pickable(self, name, pickable):
         """Toggle picking on a named actor.
@@ -2320,6 +2381,74 @@ class TreeVisualizerGUI(QMainWindow):
                     return
                 except Exception:
                     continue
+            try:
+                if hasattr(obj, "pickable"):
+                    obj.pickable = bool(pickable)
+                    return
+            except Exception:
+                continue
+
+    def _set_volume_overlay_actors_unpickable(self):
+        """Keep volume/DBH circle overlays out of the point picker.
+
+        Loaded and calculated volume circles are dense PolyData (dozens of
+        vertices per ring). If those actors stay pickable, vtkPointPicker
+        snaps to the circle vertices instead of the tree point cloud.
+
+        This iterates the actor dict ONCE and sets pickability directly on
+        each actor (no per-actor re-lookup), so it stays fast even with
+        thousands of actors.
+        """
+        if not self.plotter:
+            return
+        try:
+            actors = self.plotter.actors
+            items = list(actors.items()) if hasattr(actors, "items") else list(actors)
+        except Exception:
+            return
+
+        overlay_tokens = (
+            'dbh_',
+            'volume_section_',
+            'trunk_dbh_',
+            'section_info_label',
+            'volume_info_text',
+            'circle',
+            'trajectory',
+        )
+
+        def _set_pickable(obj, pickable):
+            try:
+                setter = getattr(obj, "SetPickable", None)
+                if callable(setter):
+                    setter(bool(pickable))
+                    return
+            except Exception:
+                pass
+            try:
+                if hasattr(obj, "pickable"):
+                    obj.pickable = bool(pickable)
+            except Exception:
+                pass
+
+        for item in items:
+            if isinstance(item, tuple):
+                name, actor = item
+            else:
+                name, actor = item, None
+            if name == 'tree_point_cloud':
+                continue
+            lname = str(name).lower()
+            if not any(token in lname for token in overlay_tokens):
+                continue
+            if actor is not None:
+                _set_pickable(actor, False)
+                try:
+                    prop = getattr(actor, "prop", None)
+                except Exception:
+                    prop = None
+                if prop is not None:
+                    _set_pickable(prop, False)
 
     def _on_gdb_pick_mode_toggled(self, checked):
         """Toggle between GDB point picking and tree point picking."""
@@ -2344,6 +2473,7 @@ class TreeVisualizerGUI(QMainWindow):
         for actor_name in list(self.gdb_layers.keys()):
             self._set_actor_pickable(actor_name, gdb_mode)
         self._set_actor_pickable('tree_point_cloud', not gdb_mode)
+        self._set_volume_overlay_actors_unpickable()
 
     def _extract_picked_position(self, picked_info):
         """Extract the 3D picked position from a PyVista pick callback payload."""
@@ -5381,7 +5511,8 @@ class TreeVisualizerGUI(QMainWindow):
                         point_size=4,
                         opacity=0.6,
                         name=f'volume_section_{section_id}_points',
-                        label=f'Section {section_id}{branch_suffix} Points ({len(group_points)} pts)'
+                        label=f'Section {section_id}{branch_suffix} Points ({len(group_points)} pts)',
+                        pickable=False
                     )
 
                     # Add circle fitting
@@ -5472,7 +5603,8 @@ class TreeVisualizerGUI(QMainWindow):
                     point_size=4,
                     opacity=0.6,
                     name=f'volume_section_{section_id}_points',
-                    label=f'Section {section_id}{branch_suffix} Points ({len(group_points)} pts)'
+                    label=f'Section {section_id}{branch_suffix} Points ({len(group_points)} pts)',
+                    pickable=False
                 )
 
                 # Add circle fitting
@@ -8015,7 +8147,8 @@ Important:
             trajectory_name = f'dbh_trajectory_section_{section_id}' if run_id is None else f'dbh_trajectory_run_{run_id}_section_{section_id}'
             self.plotter.add_mesh(centers_cloud, color='white', point_size=8,
                                 render_points_as_spheres=True, opacity=1.0,
-                                name=trajectory_name, label=f'Section {section_id} Trajectory ({len(circle_centers)} pts)')
+                                name=trajectory_name, label=f'Section {section_id} Trajectory ({len(circle_centers)} pts)',
+                                pickable=False)
 
             # Compute average center and radius for all circles
             avg_x = np.mean([c[0] for c in circle_centers])
@@ -8047,7 +8180,8 @@ Important:
                 individual_name = f'dbh_individual_circles_section_{section_id}' if run_id is None else f'dbh_individual_circles_run_{run_id}_section_{section_id}'
                 self.plotter.add_mesh(merged_individual, color=circle_color, opacity=0.3,
                                     name=individual_name,
-                                    label=f'Section {section_id} Individual Circles ({len(circle_centers)} circles)')
+                                    label=f'Section {section_id} Individual Circles ({len(circle_centers)} circles)',
+                                    pickable=False)
 
             # Add average circle at EVERY height level where individual circles exist
             self._add_average_dbh_circles_for_section(circle_centers, final_center, final_radius, section_id, avg_color, run_id=run_id)
@@ -8211,7 +8345,8 @@ Important:
                 merged_extrapolated = merged_extrapolated + mesh
             self.plotter.add_mesh(merged_extrapolated, color=circle_color, opacity=0.3,
                                 name=f'dbh_circle_section_{section_id}_extrapolated',
-                                label=f'Section {section_id} Extrapolated ({len(extrapolated_meshes)} circles)')
+                                label=f'Section {section_id} Extrapolated ({len(extrapolated_meshes)} circles)',
+                                pickable=False)
 
         # Add extrapolated circles to the section data
         all_circles = existing_circles + extrapolated_circles
@@ -8410,7 +8545,8 @@ Important:
             # Add the merged mesh to the plotter
             self.plotter.add_mesh(merged_extrapolated, color='cyan', opacity=0.3,
                                 name=f'dbh_global_extrapolated_circles',
-                                label=f'Global Extrapolated Circles ({len(extrapolated_circle_meshes)} circles)')
+                                label=f'Global Extrapolated Circles ({len(extrapolated_circle_meshes)} circles)',
+                                pickable=False)
 
         if extrapolated_circles:
             # Create a new global extrapolated section
@@ -8510,7 +8646,8 @@ Important:
                 actor_name = f'dbh_avg_circles_section_{section_id}' if run_id is None else f'dbh_avg_circles_run_{run_id}_section_{section_id}'
                 self.plotter.add_mesh(merged_average, color=avg_color, line_width=3, opacity=0.9,
                                     name=actor_name,
-                                    label=f'Section {section_id} Avg Circles ({len(circle_centers)} circles)')
+                                    label=f'Section {section_id} Avg Circles ({len(circle_centers)} circles)',
+                                    pickable=False)
 
             # Add a single center marker for the average center trajectory
             centers_array = np.array([[center[0], center[1], center[2]] for center in circle_centers])
@@ -8518,7 +8655,8 @@ Important:
             traj_name = f'dbh_avg_trajectory_section_{section_id}' if run_id is None else f'dbh_avg_trajectory_run_{run_id}_section_{section_id}'
             self.plotter.add_mesh(avg_centers_cloud, color=avg_color, point_size=6,
                                 render_points_as_spheres=True, opacity=1.0,
-                                name=traj_name, label=f'Section {section_id} Avg Trajectory ({len(circle_centers)} pts)')
+                                name=traj_name, label=f'Section {section_id} Avg Trajectory ({len(circle_centers)} pts)',
+                                pickable=False)
 
             self.log_to_console(f"🎯 Added section {section_id} average circles at {len(circle_centers)} height levels (R={avg_radius:.3f}m)")
 
@@ -8685,7 +8823,8 @@ Important:
                         point_size=4,
                         opacity=0.6,
                         name=f'volume_section_{section_id}_points',
-                        label=f'Section {section_id}{branch_suffix} Points ({len(group_points)} pts)'
+                        label=f'Section {section_id}{branch_suffix} Points ({len(group_points)} pts)',
+                        pickable=False
                     )
 
                     # Add circle fitting to selected points with section-specific naming
@@ -8901,6 +9040,7 @@ Important:
 
                 self.plotter.add_text(info_text, position='upper_left', font_size=10, color='#FFFFFF',
                                     name='volume_info_text')
+                self._set_volume_overlay_actors_unpickable()
 
                 # Ensure plotter updates to show all accumulated sections
                 self.plotter.update()
@@ -9053,8 +9193,14 @@ Important:
             tree_base_z = 0.0
             dbh_target_z = target_height
 
-        self.log_to_console(f"🔍 DBH DEBUG: target_height={target_height:.2f}m, tree_base_z={tree_base_z:.2f}m, dbh_target_z={dbh_target_z:.2f}m")
-        self.log_to_console(f"🔍 DBH DEBUG: scanning {len(self.accumulated_volume_sections)} accumulated section(s)")
+        debug_logs = [
+            f"🔍 DBH DEBUG: target_height={target_height:.2f}m, tree_base_z={tree_base_z:.2f}m, dbh_target_z={dbh_target_z:.2f}m",
+            f"🔍 DBH DEBUG: scanning {len(self.accumulated_volume_sections)} accumulated section(s)",
+        ]
+
+        # Track the closest section per trunk as a fallback when no section's
+        # Z range contains dbh_target_z (e.g. no trunk points near that height).
+        closest_fallback: Dict[str, Dict[str, Any]] = {}
 
         for section in self.accumulated_volume_sections:
             trunk_id = section.get('trunk_id', None)
@@ -9076,7 +9222,7 @@ Important:
 
             local_branch = self._to_local_branch_id(branch_id)
             global_str = f"(global={branch_id})" if branch_id is not None and branch_id != local_branch else ""
-            self.log_to_console(
+            debug_logs.append(
                 f"🔍 DBH DEBUG: Section sec={sec_id} tree={tree_id} trunk={trunk_id} branch={local_branch}{global_str} "
                 f"Z=[{z_min_str}, {z_max_str}] avg_R={avg_r_str}"
             )
@@ -9085,24 +9231,28 @@ Important:
 
             if (avg_radius is not None and avg_center is not None and len(avg_center) >= 2
                     and section_min_z is not None and section_max_z is not None):
+                try:
+                    _sec_num = int(str(sec_id))
+                except (ValueError, TypeError):
+                    _sec_num = 0
+
+                # Use XY of the individual circle closest to dbh_target_z
+                # so the blue circle aligns with the red circle at that height.
+                circles = circle_data.get('circles', [])
+                best_xy = avg_center  # fallback to section average XY
+                best_z = dbh_target_z  # fallback to the DBH height
+                best_dist = float('inf')
+                if circles and len(circles) > 0:
+                    for center, _radius in circles:
+                        dist = abs(center[2] - dbh_target_z)
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_xy = [center[0], center[1]]
+                            best_z = float(center[2])
+
                 if section_min_z <= dbh_target_z <= section_max_z:
-                    try:
-                        _sec_num = int(str(sec_id))
-                    except (ValueError, TypeError):
-                        _sec_num = 0
-
-                    # Use XY of the individual circle closest to dbh_target_z
-                    # so the blue circle aligns with the red circle at that height.
-                    circles = circle_data.get('circles', [])
-                    best_xy = avg_center  # fallback to section average XY
-                    if circles and len(circles) > 0:
-                        best_dist = float('inf')
-                        for center, _radius in circles:
-                            dist = abs(center[2] - dbh_target_z)
-                            if dist < best_dist:
-                                best_dist = dist
-                                best_xy = [center[0], center[1]]
-
+                    # Trunk has points at the DBH height: draw the blue circle
+                    # at the DBH height itself.
                     candidate = {
                         'tree_id': str(tree_id),
                         'dbh_cm': float(avg_radius) * 2.0 * 100.0,
@@ -9115,17 +9265,40 @@ Important:
                         'dbh_target_z': float(dbh_target_z),
                         '_sec_num': int(_sec_num),
                     }
-                    self.log_to_console(
+                    debug_logs.append(
                         f"   ✅ QUALIFIES: Z range contains dbh_target_z → candidate (priority=0, sec_num={_sec_num})"
                     )
                 else:
-                    self.log_to_console(
-                        f"   ❌ SKIPPED: Z range [{z_min_str}, {z_max_str}] does NOT contain dbh_target_z={dbh_target_z:.2f}"
+                    # Record as a fallback candidate using the closest circle to
+                    # the DBH height, so trees without trunk points near that
+                    # height still get a blue DBH circle drawn. The circle is
+                    # drawn at the actual closest circle's Z for realism.
+                    fallback_key = f"{str(tree_id)}_{int(trunk_id)}"
+                    fallback_dist = abs(section_min_z - dbh_target_z) if dbh_target_z < section_min_z else abs(section_max_z - dbh_target_z)
+                    fallback_candidate = {
+                        'tree_id': str(tree_id),
+                        'dbh_cm': float(avg_radius) * 2.0 * 100.0,
+                        'radius_m': float(avg_radius),
+                        'center_xyz': [float(best_xy[0]), float(best_xy[1]), float(best_z)],
+                        'score': float(best_dist),
+                        'priority': 1,
+                        'section_id': f"section_avg@{sec_id}",
+                        'branch_id': self._to_local_branch_id(branch_id),
+                        'dbh_target_z': float(dbh_target_z),
+                        '_sec_num': int(_sec_num),
+                        '_fallback_dist': float(fallback_dist),
+                    }
+                    existing_fb = closest_fallback.get(fallback_key)
+                    if existing_fb is None or fallback_dist < existing_fb.get('_fallback_dist', float('inf')):
+                        closest_fallback[fallback_key] = fallback_candidate
+                    debug_logs.append(
+                        f"   ⏳ FALLBACK candidate for {fallback_key}: Z range [{z_min_str}, {z_max_str}] does NOT contain "
+                        f"dbh_target_z={dbh_target_z:.2f} (closest circle dist={best_dist:.3f}m)"
                     )
             elif avg_radius is None:
-                self.log_to_console(f"   ❌ SKIPPED: no avg_radius")
+                debug_logs.append("   ❌ SKIPPED: no avg_radius")
             else:
-                self.log_to_console(f"   ❌ SKIPPED: missing avg_center or Z range")
+                debug_logs.append("   ❌ SKIPPED: missing avg_center or Z range")
 
             if candidate is not None:
                 tree_id_str = str(tree_id)
@@ -9133,7 +9306,7 @@ Important:
                 rec = trunk_dbh.get(composite_key)
                 if rec is None:
                     trunk_dbh[composite_key] = candidate
-                    self.log_to_console(
+                    debug_logs.append(
                         f"   🏆 SELECTED for {composite_key}: branch={branch_id}, DBH={candidate['dbh_cm']:.1f}cm, sec_num={candidate['_sec_num']}"
                     )
                 else:
@@ -9141,21 +9314,35 @@ Important:
                     old_sort = (rec['priority'], -rec.get('_sec_num', 0), rec['score'])
                     if new_sort < old_sort:
                         trunk_dbh[composite_key] = candidate
-                        self.log_to_console(
+                        debug_logs.append(
                             f"   🔄 REPLACED {composite_key}: old branch={rec.get('branch_id')} sec_num={rec.get('_sec_num')} → new branch={branch_id} sec_num={candidate['_sec_num']}"
                         )
                     else:
-                        self.log_to_console(
+                        debug_logs.append(
                             f"   ⏩ IGNORED for {composite_key}: existing has better sort (old_sec_num={rec.get('_sec_num')}, new_sec_num={candidate['_sec_num']})"
                         )
+
+        # Apply closest-circle fallback for trunks that had no section containing
+        # the DBH height, so a blue DBH circle is still drawn.
+        for fallback_key, fallback_candidate in closest_fallback.items():
+            if fallback_key not in trunk_dbh:
+                trunk_dbh[fallback_key] = fallback_candidate
+                debug_logs.append(
+                    f"   🎯 FALLBACK SELECTED for {fallback_key}: no section at DBH height, "
+                    f"using closest circle (branch={fallback_candidate.get('branch_id')}, "
+                    f"DBH={fallback_candidate['dbh_cm']:.1f}cm, dist={fallback_candidate.get('_fallback_dist', 0):.3f}m)"
+                )
 
         # No trunk-point refit fallback here by design:
         # DBH should come from section-fitted circles used by the same branch/volume pipeline.
 
         trunk_dbh_values = {key: rec['dbh_cm'] for key, rec in trunk_dbh.items()}
-        self.log_to_console(f"🔍 DBH DEBUG: final candidates = {list(trunk_dbh.keys())}")
+        debug_logs.append(f"🔍 DBH DEBUG: final candidates = {list(trunk_dbh.keys())}")
         for key, rec in trunk_dbh.items():
-            self.log_to_console(f"   {key}: branch={rec.get('branch_id')} DBH={rec['dbh_cm']:.1f}cm source={rec.get('section_id')} sec_num={rec.get('_sec_num', '?')}")
+            debug_logs.append(
+                f"   {key}: branch={rec.get('branch_id')} DBH={rec['dbh_cm']:.1f}cm source={rec.get('section_id')} sec_num={rec.get('_sec_num', '?')}"
+            )
+        self.log_many_to_console(debug_logs)
         rows = []
         header = f"{'Tree/Trunk':<16} {'DBH_cm':>12} {'Source':>24}"
         rows.append(header)
@@ -9211,9 +9398,20 @@ Important:
         return None
 
     def _add_trunk_dbh_overlays(self, trunk_dbh_details: Dict[str, Dict[str, Any]]):
-        """Render trunk-level DBH circles and labels in blue for all trunks with DBH estimates."""
-        if self.plotter is None:
+        """Render trunk-level DBH circles and labels in blue for all trunks with DBH estimates.
+
+        Circles and labels are batched into two actors. Adding one mesh + one
+        label actor per trunk is much slower because each add_mesh/add_point_labels
+        rebuilds VTK state and can trigger a render.
+        """
+        if self.plotter is None or not trunk_dbh_details:
             return
+
+        import re as _re
+
+        circle_specs = []
+        label_points = []
+        label_texts = []
 
         for composite_key, rec in trunk_dbh_details.items():
             center = rec.get('center_xyz')
@@ -9226,51 +9424,67 @@ Important:
             if center is None or radius_m is None or dbh_cm is None:
                 continue
 
-            # Parse trunk_id from composite key for display
             parts = composite_key.rsplit('_', 1)
             trunk_display = parts[-1] if len(parts) == 2 else str(composite_key)
 
-            # Parse section number from section_id (e.g., "section_avg@5" → "5")
             sec_display = ""
             if section_id and section_id != '?':
-                import re as _re
                 m = _re.search(r'@(\d+)', str(section_id))
                 if m:
                     sec_display = f"/S{m.group(1)}"
                 else:
                     sec_display = f"/{section_id}"
 
-            # Build source info showing which branch/section was used for DBH
             source_info = ""
             if branch_id is not None:
                 source_info += f"/B{branch_id}"
             source_info += sec_display
 
             try:
-                circle = pv.Circle(radius=float(radius_m), resolution=64)
-                circle.translate([float(center[0]), float(center[1]), float(center[2])], inplace=True)
-                self.plotter.add_mesh(
-                    circle,
-                    color='blue',
-                    opacity=0.9,
-                    line_width=4,
-                    style='wireframe',
-                    name=f'trunk_dbh_circle_{tree_id}_{trunk_display}',
-                    label=f'Tree {tree_id} / Trunk {trunk_display}{source_info} DBH: {float(dbh_cm):.1f}cm'
-                )
+                center_xyz = [float(center[0]), float(center[1]), float(center[2])]
+                radius_val = float(radius_m)
+                circle_specs.append((center_xyz, radius_val))
+                label_points.append([center_xyz[0] + radius_val * 1.25, center_xyz[1], center_xyz[2]])
+                label_texts.append(f'T{tree_id}/T{trunk_display}{source_info}: {float(dbh_cm):.1f}cm')
+            except Exception as e:
+                self.log_to_console(f"⚠️ Failed to prepare blue trunk DBH overlay for tree {tree_id} trunk {trunk_display}: {e}")
 
-                label_pos = [float(center[0] + float(radius_m) * 1.25), float(center[1]), float(center[2])]
+        if not circle_specs:
+            return
+
+        was_suppressed = bool(getattr(self.plotter, 'suppress_rendering', False))
+        self.plotter.suppress_rendering = True
+        try:
+            merged_circles = self._build_circles_mesh(circle_specs, resolution=64)
+            self.plotter.add_mesh(
+                merged_circles,
+                color='blue',
+                opacity=0.9,
+                line_width=4,
+                style='wireframe',
+                name='trunk_dbh_circles',
+                label=f'Trunk DBH Circles ({len(circle_specs)})',
+                pickable=False
+            )
+
+            if label_points:
                 self.plotter.add_point_labels(
-                    [label_pos],
-                    [f'T{tree_id}/T{trunk_display}{source_info}: {float(dbh_cm):.1f}cm'],
+                    label_points,
+                    label_texts,
                     font_size=12,
                     text_color='blue',
                     point_size=0,
                     always_visible=True,
-                    name=f'trunk_dbh_label_{tree_id}_{trunk_display}'
+                    name='trunk_dbh_labels',
+                    pickable=False,
+                    render=False
                 )
-            except Exception as e:
-                self.log_to_console(f"⚠️ Failed to draw blue trunk DBH overlay for tree {tree_id} trunk {trunk_display}: {e}")
+        except Exception as e:
+            self.log_to_console(f"⚠️ Failed to draw blue trunk DBH overlays: {e}")
+        finally:
+            if not was_suppressed:
+                self.plotter.suppress_rendering = False
+                self.plotter.render()
 
     def _log_section_diameter_breakdown(self):
         """Log a per-section diameter breakdown to the console (only when ≤3 trees loaded)."""
@@ -9331,23 +9545,24 @@ Important:
 
     def _add_section_info_labels(self):
         """Add 3D labels for each accumulated volume section showing trunk/branch/section info.
-        
-        Labels are placed at the average center XY with Z at the section's min_z,
-        helping identify which branch and section each colored circle group belongs to.
-        
-        Skip label rendering when more than 3 trees are loaded to keep the UI responsive.
+
+        Labels are placed at the average center XY with Z at the section's min_z.
+        Only rendered when the load contains 3 or fewer trees; larger loads skip
+        the white section labels to keep the scene readable and responsive.
         """
         if self.plotter is None:
             return
 
-        # For large datasets (>3 trees), skip detailed section labels to keep UI responsive.
-        # The trunk DBH summary table and blue DBH circles are still shown.
         unique_tree_ids = set(str(s.get('tree_id', '')) for s in self.accumulated_volume_sections) - {''}
         if len(unique_tree_ids) > 3:
-            self.log_to_console(f"⏩ Skipping section labels: {len(unique_tree_ids)} trees loaded (>3 threshold)")
+            self.log_to_console(
+                f"⏩ Skipping section labels: {len(unique_tree_ids)} trees loaded (>3 threshold)"
+            )
             return
 
         seen = set()
+        label_points = []
+        label_texts = []
         for section in self.accumulated_volume_sections:
             dedup_key = (str(section.get('tree_id', '?')), str(section.get('section_id', '?')))
             if dedup_key in seen:
@@ -9365,7 +9580,6 @@ Important:
             branch_id = section.get('branch_id', None)
             sec_id = section.get('section_id', '?')
 
-            # Build label: "T{tree}/Tr{trunk}/B{branch}/S{section}"
             parts = [f"T{tree_id}"]
             if trunk_id is not None:
                 try:
@@ -9378,7 +9592,6 @@ Important:
                 except (ValueError, TypeError):
                     parts.append(f"B{branch_id}")
             parts.append(f"S{sec_id}")
-            # Append diameter value if available
             avg_r = circle_data.get('avg_radius')
             if avg_r is not None and avg_r > 0:
                 diam_cm = float(avg_r) * 2.0 * 100.0
@@ -9386,23 +9599,27 @@ Important:
             else:
                 label_text = "/".join(parts)
 
-            label_pos = [float(avg_center[0]), float(avg_center[1]), float(min_z)]
-            label_name = f'section_info_label_{tree_id}_{sec_id}'
+            label_points.append([float(avg_center[0]), float(avg_center[1]), float(min_z)])
+            label_texts.append(label_text)
 
-            self.log_to_console(f"🏷️  Section label: {label_text} at Z={min_z:.2f}")
+        if not label_points:
+            return
 
-            try:
-                self.plotter.add_point_labels(
-                    [label_pos],
-                    [label_text],
-                    font_size=9,
-                    text_color='white',
-                    point_size=5,
-                    always_visible=True,
-                    name=label_name
-                )
-            except Exception as e:
-                self.log_to_console(f"⚠️ Failed to add section label for S{sec_id}: {e}")
+        try:
+            self.plotter.add_point_labels(
+                label_points,
+                label_texts,
+                font_size=9,
+                text_color='white',
+                point_size=5,
+                always_visible=True,
+                name='section_info_labels',
+                pickable=False,
+                render=False
+            )
+            self.log_to_console(f"🏷️  Added {len(label_texts)} section labels")
+        except Exception as e:
+            self.log_to_console(f"⚠️ Failed to add section labels: {e}")
 
     def clear_accumulated_volume(self):
         """
@@ -9424,16 +9641,22 @@ Important:
                 # Suppress rendering during batch removal for performance
                 self.plotter.suppress_rendering = True
                 
-                # Remove all volume-related and DBH-related meshes and actors
-                actors_to_remove = []
-                for actor_name in self.plotter.actors:
-                    if ('volume' in actor_name.lower() or 
-                        'dbh_' in actor_name.lower() or 
-                        'trajectory' in actor_name.lower() or 
-                        'circle' in actor_name.lower() or
-                        'section_info_label' in actor_name.lower()):
-                        actors_to_remove.append(actor_name)
-                
+                # Remove all volume-related and DBH-related meshes and actors.
+                # Snapshot the actor dict ONCE (iterating self.plotter.actors
+                # repeatedly is O(n²) and very slow with thousands of actors).
+                try:
+                    actor_names = list(self.plotter.actors)
+                except Exception:
+                    actor_names = []
+                actors_to_remove = [
+                    name for name in actor_names
+                    if ('volume' in name.lower() or
+                        'dbh_' in name.lower() or
+                        'trajectory' in name.lower() or
+                        'circle' in name.lower() or
+                        'section_info_label' in name.lower())
+                ]
+
                 for actor_name in actors_to_remove:
                     try:
                         self.plotter.remove_actor(actor_name)
@@ -9618,7 +9841,9 @@ Important:
         """Load volume calculation data from tree JSON files in a folder."""
         try:
             self.progress_bar.setVisible(True)
+            self._start_volume_load_profile()
             self._set_progress(2, "Resolving volume folder")
+            self._profile_volume_load('start')
 
             # Reuse the remembered folder when available; otherwise resolve it from the current LAS path.
             folder = None
@@ -9647,6 +9872,7 @@ Important:
                 os.makedirs(folder, exist_ok=True)
             except Exception as e:
                 QMessageBox.warning(self, "Volume Folder Error", f"Could not create volume folder:\n{folder}\n\n{e}")
+                self._finish_volume_load_profile('folder_error')
                 return
 
             import json
@@ -9658,9 +9884,11 @@ Important:
 
             # Find all tree_*.json files in the folder
             all_tree_files = sorted(glob.glob(os.path.join(folder, "tree_*.json")))
+            self._profile_volume_load('resolve_folder_and_list_files', extra=f'{len(all_tree_files)} files in {folder}')
             
             if not all_tree_files:
                 QMessageBox.warning(self, "No Tree Files", f"No tree_*.json files found in {folder}")
+                self._finish_volume_load_profile('no_files')
                 return
 
             # If specific tree(s) are selected in the tree list, load only their data
@@ -9679,6 +9907,7 @@ Important:
                         self, "No Data For Selected Tree(s)",
                         f"No volume data files found for selected tree(s): {sorted(selected_tree_ids)}\n\n"
                         f"Folder searched: {folder}")
+                    self._finish_volume_load_profile('no_selected_tree_files')
                     return
 
                 self.log_to_console(
@@ -9695,8 +9924,10 @@ Important:
                                            "Loading new volume data will clear existing calculations. Continue?",
                                            QMessageBox.Yes | QMessageBox.No)
                 if reply == QMessageBox.No:
+                    self._finish_volume_load_profile('cancelled')
                     return
                 self.clear_accumulated_volume()
+                self._profile_volume_load('clear_existing_volume')
 
             # Load data from all tree files
             self.accumulated_volume_sections = []
@@ -9721,6 +9952,7 @@ Important:
                     if i % max(1, len(tree_files) // 20) == 0:
                         self._set_progress(10 + int(30 * i / len(tree_files)),
                                            f"Reading JSON {i}/{len(tree_files)}")
+            self._profile_volume_load('read_json_files', extra=f'{len(parsed_files)} files')
 
             self._set_progress(42, "Parsing sections")
 
@@ -9773,6 +10005,7 @@ Important:
                 except Exception as e:
                     per_tree_logs.append(f"⚠️ Error loading {tree_file}: {e}")
                     continue
+            self._profile_volume_load('parse_sections', extra=f'{total_sections} sections from {loaded_trees} trees')
 
             # Flush all per-tree messages in a single console update
             self.log_many_to_console(per_tree_logs)
@@ -9792,6 +10025,7 @@ Important:
                 self.log_to_console(f"🧹 Removed {_dup_count} duplicate section(s) from loaded data")
                 self.accumulated_volume_sections = _deduped
                 total_sections = len(self.accumulated_volume_sections)
+            self._profile_volume_load('deduplicate_sections', extra=f'{total_sections} unique sections')
 
             # Track which trees have volume data for UI coloring.
             # Base this on ALL files present in the folder (not just the loaded
@@ -9809,6 +10043,7 @@ Important:
             
             # Refresh tree list colors to show which trees have volume data
             self._refresh_tree_list_colors()
+            self._profile_volume_load('refresh_tree_list_colors')
             
             # Update UI
             self.clear_volume_button.setEnabled(True)
@@ -9835,32 +10070,76 @@ Important:
             if self.plotter is not None:
                 self.plotter.suppress_rendering = True
             n_sections = len(self.accumulated_volume_sections)
+            # Batch all section circles into a single mesh (one add_mesh call)
+            # instead of one add_mesh per section, which is O(n²) and very slow
+            # with hundreds of sections.
+            individual_specs = []
+            average_specs = []
             for i, section_info in enumerate(self.accumulated_volume_sections):
-                self._restore_section_visualization(section_info)
+                circle_data = section_info.get('circle_data') or {}
+                circles = circle_data.get('circles') or []
+                if circles:
+                    individual_specs.extend(circles)
+                    avg_r = circle_data.get('avg_radius')
+                    if avg_r and avg_r > 0:
+                        average_specs.extend((center, avg_r) for center, _ in circles)
                 if i % max(1, n_sections // 25) == 0:
                     self._set_progress(55 + int(40 * i / max(1, n_sections)),
                                        f"Restoring circles {i}/{n_sections}")
-            if self.plotter is not None:
-                self.plotter.suppress_rendering = False
-                self.plotter.render()
-            self._set_progress(97, "Finalizing")
-            self.log_to_console(f"✅ Visualization restoration complete")
 
-            # --- Restore trunk DBH overlays and volume info text (same as calculate_volume_from_selection) ---
-            # Determine if any loaded section is branch mode (has branch_id)
+            if individual_specs:
+                merged_individual = self._build_circles_mesh(individual_specs)
+                self.plotter.add_mesh(
+                    merged_individual,
+                    color='cyan',
+                    style='wireframe',
+                    line_width=2,
+                    opacity=0.9,
+                    name='dbh_individual_circles_loaded',
+                    label=f'Loaded Individual Circles ({len(individual_specs)} circles)',
+                    pickable=False
+                )
+            if average_specs:
+                merged_average = self._build_circles_mesh(average_specs)
+                self.plotter.add_mesh(
+                    merged_average,
+                    color='red',
+                    style='wireframe',
+                    line_width=3,
+                    opacity=0.9,
+                    name='dbh_avg_circles_loaded',
+                    label=f'Loaded Avg Circles ({len(average_specs)} circles)',
+                    pickable=False
+                )
+            self._profile_volume_load('restore_section_circles', extra=f'{n_sections} sections')
             self._set_progress(96, "Building summaries")
             has_branch_mode = any(s.get('branch_id') is not None for s in self.accumulated_volume_sections)
 
             # Build trunk volume summary and log to console
             trunk_summary, trunk_summary_lines, trunk_total_volume = self._build_trunk_volume_summary_table()
+            self._profile_volume_load('build_trunk_volume_summary')
             trunk_dbh_summary, trunk_dbh_lines, trunk_dbh_details = self._build_trunk_dbh_summary_table() if has_branch_mode else ({}, [], {})
+            self._profile_volume_load(
+                'build_trunk_dbh_summary',
+                extra=f'{len(trunk_dbh_details)} trunks' if has_branch_mode else 'skipped'
+            )
 
             if has_branch_mode and trunk_dbh_details:
                 self._add_trunk_dbh_overlays(trunk_dbh_details)
+                self._profile_volume_load('add_blue_dbh_overlays', extra=f'{len(trunk_dbh_details)} trunks')
 
             # Add section info labels showing trunk/branch/section for each loaded section
             self._add_section_info_labels()
+            self._profile_volume_load('add_section_info_labels')
+            if self.plotter is not None:
+                self.plotter.suppress_rendering = False
+                self._profile_volume_load('before_first_render')
+                self.plotter.render()
+                self._profile_volume_load('plotter_render')
+            self._set_progress(97, "Finalizing")
+            self.log_to_console(f"✅ Visualization restoration complete")
             self._log_section_diameter_breakdown()
+            self._profile_volume_load('log_section_diameter_breakdown')
 
             if trunk_summary:
                 self.log_to_console(f"📦 Total trunks used for volume: {len(trunk_summary)}")
@@ -9934,9 +10213,11 @@ Important:
                 self.plotter.add_text(info_text, position='upper_left', font_size=10, color='#FFFFFF',
                                     name='volume_info_text')
                 self.plotter.update()
+                self._profile_volume_load('add_volume_info_text_and_update')
 
             self._set_progress(100, "Done")
             self.progress_bar.setVisible(False)
+            self._finish_volume_load_profile('done')
 
             QMessageBox.information(self, "Load Successful",
                                   f"Volume data loaded from {len(tree_files)} files in {folder}\n"
@@ -9946,6 +10227,7 @@ Important:
 
         except Exception as e:
             self.progress_bar.setVisible(False)
+            self._finish_volume_load_profile('error')
             QMessageBox.warning(self, "Load Error", f"Error loading volume data: {str(e)}")
             print(f"Load volume data error: {e}")
 
@@ -9983,7 +10265,8 @@ Important:
 
                     self.plotter.add_mesh(merged_individual, color=circle_color, style='wireframe', line_width=2, opacity=0.9,
                                         name=f'dbh_individual_circles_tree_{tree_id}_section_{section_id}',
-                                        label=f'Tree {tree_id} - Section {section_id} Individual Circles ({len(circle_data["circles"])} circles)')
+                                        label=f'Tree {tree_id} - Section {section_id} Individual Circles ({len(circle_data["circles"])} circles)',
+                                        pickable=False)
 
                 # Recreate average circles if data available
                 if 'avg_radius' in circle_data and 'avg_center' in circle_data and circle_data['avg_radius'] > 0:
@@ -10000,7 +10283,8 @@ Important:
 
                     self.plotter.add_mesh(merged_average, color=avg_color, style='wireframe', line_width=3, opacity=0.9,
                                         name=f'dbh_avg_circles_tree_{tree_id}_section_{section_id}',
-                                        label=f'Tree {tree_id} - Section {section_id} Avg Circles ({len(circle_data["circles"])} circles)')
+                                        label=f'Tree {tree_id} - Section {section_id} Avg Circles ({len(circle_data["circles"])} circles)',
+                                        pickable=False)
 
                     # Add a single center marker for the average center trajectory
                     centers_array = np.array([[center[0], center[1], center[2]] for center, _ in circle_data['circles']])
@@ -10416,7 +10700,8 @@ Important:
             # Use white spheres for trajectory points
             self.plotter.add_mesh(centers_cloud, color='white', point_size=8,
                                 render_points_as_spheres=True, opacity=1.0,
-                                name='dbh_trajectory', label=f'DBH Trajectory ({len(circle_centers)} pts)')
+                                name='dbh_trajectory', label=f'DBH Trajectory ({len(circle_centers)} pts)',
+                                pickable=False)
 
             # Compute average center and radius for all circles
             avg_x = np.mean([c[0] for c in circle_centers])
@@ -10433,7 +10718,8 @@ Important:
 
                 # Use filled circles (disks) for individual circles
                 self.plotter.add_mesh(circle, color='cyan', opacity=0.3,
-                                    name=f'dbh_circle_{i}', label=f'DBH Circle Z={center[2]:.1f}m')
+                                    name=f'dbh_circle_{i}', label=f'DBH Circle Z={center[2]:.1f}m',
+                                    pickable=False)
 
             # Add average circle at EVERY height level where individual circles exist
             self._add_average_dbh_circles_at_all_levels(circle_centers, final_center, final_radius)
@@ -10463,14 +10749,16 @@ Important:
 
                 # Use red color for average circles, slightly thicker
                 self.plotter.add_mesh(avg_circle_wireframe, color='red', line_width=3, opacity=0.9,
-                                    name=f'dbh_avg_circle_{i}', label=f'DBH Avg Circle Z={height_z:.1f}m')
+                                    name=f'dbh_avg_circle_{i}', label=f'DBH Avg Circle Z={height_z:.1f}m',
+                                    pickable=False)
 
             # Add a single center marker for the average center trajectory
             centers_array = np.array([[avg_center[0], avg_center[1], center[2]] for center in circle_centers])
             avg_centers_cloud = pv.PolyData(centers_array)
             self.plotter.add_mesh(avg_centers_cloud, color='red', point_size=6,
                                 render_points_as_spheres=True, opacity=1.0,
-                                name='dbh_avg_trajectory', label=f'DBH Avg Trajectory ({len(circle_centers)} pts)')
+                                name='dbh_avg_trajectory', label=f'DBH Avg Trajectory ({len(circle_centers)} pts)',
+                                pickable=False)
 
             self.log_to_console(f"🎯 Added DBH Average Circles at {len(circle_centers)} height levels (R={avg_radius:.3f}m)")
 
