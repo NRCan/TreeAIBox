@@ -29,7 +29,7 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial.distance import cdist
 from scipy.spatial import KDTree
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 import multiprocessing
 
 
@@ -1000,6 +1000,34 @@ class TreeVisualizerGUI(QMainWindow):
         # Auto-scroll to bottom
         scrollbar = self.console.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
+
+    def log_many_to_console(self, messages):
+        """Append many messages to the console in ONE widget update.
+
+        Much faster than calling log_to_console() per message for bulk output
+        (avoids one Qt repaint + auto-scroll per line).
+        """
+        if not messages:
+            return
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        block = "\n".join(f"[{timestamp}] {m}" for m in messages)
+        self.console.append(block)
+        print(block)
+        scrollbar = self.console.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    def _set_progress(self, value, text=None):
+        """Update the determinate progress bar and keep the UI responsive."""
+        try:
+            self.progress_bar.setRange(0, 100)
+            self.progress_bar.setValue(int(value))
+            if text:
+                self.progress_bar.setFormat(f"{text}  %p%")
+            self.progress_bar.setVisible(True)
+            QApplication.processEvents()
+        except Exception:
+            pass
 
     def apply_stylesheet(self):
         """Apply modern dark theme stylesheet."""
@@ -2811,11 +2839,15 @@ class TreeVisualizerGUI(QMainWindow):
                     # Get RGB values for the current tree(s)
                     all_rgb_values = []
                     if self.all_masks is not None:
-                        # Multiple trees selected - use all_masks
+                        # Multiple trees selected - use all_masks.
+                        # Convert the full RGB arrays once, then slice per mask.
+                        red_full = np.asarray(self.las_data['red'])
+                        green_full = np.asarray(self.las_data['green'])
+                        blue_full = np.asarray(self.las_data['blue'])
                         for mask in self.all_masks:
-                            red_vals = np.array(self.las_data['red'])[mask]
-                            green_vals = np.array(self.las_data['green'])[mask]
-                            blue_vals = np.array(self.las_data['blue'])[mask]
+                            red_vals = red_full[mask]
+                            green_vals = green_full[mask]
+                            blue_vals = blue_full[mask]
                             
                             # Normalize RGB to 0-1 range if they're in 0-65535 range (uint16)
                             if len(red_vals) > 0 and np.max(red_vals) > 1:
@@ -2858,10 +2890,8 @@ class TreeVisualizerGUI(QMainWindow):
                     # Check if we need to recalculate color values
                     if self.current_color_field != color_field or self.current_color_values is None:
                         if self.all_masks is not None:
-                            all_color_values = []
-                            for mask in self.all_masks:
-                                color_vals = np.array(self.las_data[color_field])[mask]
-                                all_color_values.append(color_vals)
+                            color_full = np.asarray(self.las_data[color_field])
+                            all_color_values = [color_full[mask] for mask in self.all_masks]
                             self.current_color_values = np.concatenate(all_color_values)
                             self.current_color_field = color_field
                         else:
@@ -3039,26 +3069,38 @@ class TreeVisualizerGUI(QMainWindow):
                 pass
 
             # Extract and merge points for all selected trees
+            # NOTE: Convert coordinate / attribute arrays ONCE up-front instead of
+            # inside the per-tree loop.  laspy's scaled x/y/z properties return a
+            # freshly computed array on every access, so converting them per-tree
+            # made "Select All" O(num_trees * num_points) and very slow.
             all_points = []
             all_masks = []
-            itc_values = np.array(self.las_data['itc'])
+            all_tree_ids = []  # tree id for each block appended to all_points
+            itc_values = np.asarray(self.las_data['itc'])
+            xs = np.asarray(self.las_data.x)
+            ys = np.asarray(self.las_data.y)
+            zs = np.asarray(self.las_data.z)
+
+            use_treefilter = (
+                self.filter_checkbox.isChecked()
+                and 'treefilter' in self.las_data.point_format.dimension_names
+            )
+            treefilter_keep = (
+                np.asarray(self.las_data['treefilter']) == 2
+            ) if use_treefilter else None
             
             for tree_id in selected_tree_ids:
                 mask = itc_values == tree_id
 
                 # Apply treefilter if enabled
-                if self.filter_checkbox.isChecked() and 'treefilter' in self.las_data.point_format.dimension_names:
-                    treefilter_values = np.array(self.las_data['treefilter'])
-                    mask = mask & (treefilter_values == 2)
+                if treefilter_keep is not None:
+                    mask = mask & treefilter_keep
 
                 if np.any(mask):
-                    points = np.column_stack([
-                        np.array(self.las_data.x)[mask],
-                        np.array(self.las_data.y)[mask],
-                        np.array(self.las_data.z)[mask]
-                    ])
+                    points = np.column_stack((xs[mask], ys[mask], zs[mask]))
                     all_points.append(points)
                     all_masks.append(mask)
+                    all_tree_ids.append(tree_id)
 
             if not all_points:
                 print(f"Warning: No points found for selected tree IDs: {selected_tree_ids}")
@@ -3072,10 +3114,14 @@ class TreeVisualizerGUI(QMainWindow):
             print(f"Visualizing {len(selected_tree_ids)} trees with {len(merged_points)} total points")
 
             # Create tree ID mapping for each point in merged_points
-            self.current_tree_ids = []
-            for i, (tree_id, points) in enumerate(zip(selected_tree_ids, all_points)):
-                self.current_tree_ids.extend([tree_id] * len(points))
-            self.current_tree_ids = np.array(self.current_tree_ids)
+            # (vectorized; also robust to selected trees that had no points)
+            if all_points:
+                self.current_tree_ids = np.concatenate([
+                    np.full(len(points), tree_id, dtype=itc_values.dtype)
+                    for tree_id, points in zip(all_tree_ids, all_points)
+                ])
+            else:
+                self.current_tree_ids = np.array([], dtype=itc_values.dtype)
 
             # Calculate bounding box and log dimensions
             if len(merged_points) > 0:
@@ -3110,21 +3156,16 @@ class TreeVisualizerGUI(QMainWindow):
                 self.current_color_values = None
                 self.current_color_field = color_field
             elif color_field != "Default (green)":
-                all_color_values = []
-                for mask in all_masks:
-                    color_vals = np.array(self.las_data[color_field])[mask]
-                    all_color_values.append(color_vals)
+                color_full = np.asarray(self.las_data[color_field])
+                all_color_values = [color_full[mask] for mask in all_masks]
                 self.current_color_values = np.concatenate(all_color_values)
                 self.current_color_field = color_field
             else:
                 self.current_color_values = None
                 self.current_color_field = color_field
 
-            # Collect ITC values for point picking
-            all_itc_values = []
-            for mask in all_masks:
-                itc_vals = np.array(self.las_data['itc'])[mask]
-                all_itc_values.append(itc_vals)
+            # Collect ITC values for point picking (itc_values already loaded above)
+            all_itc_values = [itc_values[mask] for mask in all_masks]
             self.current_itc_values = np.concatenate(all_itc_values)
 
             # Visualize with current color field (reset camera to frame tree)
@@ -9576,6 +9617,9 @@ Important:
     def load_volume_data(self):
         """Load volume calculation data from tree JSON files in a folder."""
         try:
+            self.progress_bar.setVisible(True)
+            self._set_progress(2, "Resolving volume folder")
+
             # Reuse the remembered folder when available; otherwise resolve it from the current LAS path.
             folder = None
             if hasattr(self, 'volume_folder_path') and isinstance(self.volume_folder_path, str) and self.volume_folder_path and os.path.exists(self.volume_folder_path):
@@ -9659,21 +9703,41 @@ Important:
             loaded_trees = 0
             total_sections = 0
 
-            for tree_file in tree_files:
-                try:
-                    with open(tree_file, 'r') as f:
-                        tree_data = json.load(f)
+            self._set_progress(10, f"Reading {len(tree_files)} JSON files")
 
+            # Read + parse all JSON files in parallel (I/O-bound). This is the
+            # biggest win for folders with many tree files.
+            from concurrent.futures import ThreadPoolExecutor
+
+            def _read_tree_file(tree_file):
+                with open(tree_file, 'r') as f:
+                    return tree_file, json.load(f)
+
+            parsed_files = []
+            max_workers = min(32, max(4, (os.cpu_count() or 8) * 4))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                for i, result in enumerate(executor.map(_read_tree_file, tree_files)):
+                    parsed_files.append(result)
+                    if i % max(1, len(tree_files) // 20) == 0:
+                        self._set_progress(10 + int(30 * i / len(tree_files)),
+                                           f"Reading JSON {i}/{len(tree_files)}")
+
+            self._set_progress(42, "Parsing sections")
+
+            per_tree_logs = []
+            for tree_file, tree_data in parsed_files:
+                try:
                     # Extract tree_id from filename
                     filename = os.path.basename(tree_file)
                     tree_id = filename.replace('tree_', '').replace('.json', '')
 
                     # Validate data structure
                     if 'sections' not in tree_data:
-                        self.log_to_console(f"⚠️ Skipping {filename}: no sections data")
+                        per_tree_logs.append(f"⚠️ Skipping {filename}: no sections data")
                         continue
 
                     # Load sections for this tree
+                    n_loaded = 0
                     for section_data in tree_data['sections']:
                         try:
                             # Handle both numeric and string section_ids
@@ -9698,19 +9762,24 @@ Important:
                             }
                             self.accumulated_volume_sections.append(section_info)
                             total_sections += 1
+                            n_loaded += 1
                         except (ValueError, TypeError) as e:
-                            self.log_to_console(f"⚠️ Skipping section with invalid section_id '{section_data.get('section_id', 'unknown')}': {e}")
+                            per_tree_logs.append(f"⚠️ Skipping section with invalid section_id '{section_data.get('section_id', 'unknown')}': {e}")
                             continue
 
                     loaded_trees += 1
-                    self.log_to_console(f"✅ Loaded tree {tree_id} with {len(tree_data['sections'])} sections")
+                    per_tree_logs.append(f"✅ Loaded tree {tree_id} with {n_loaded} sections")
 
                 except Exception as e:
-                    self.log_to_console(f"⚠️ Error loading {tree_file}: {e}")
+                    per_tree_logs.append(f"⚠️ Error loading {tree_file}: {e}")
                     continue
+
+            # Flush all per-tree messages in a single console update
+            self.log_many_to_console(per_tree_logs)
 
             # Deduplicate loaded sections by (tree_id, section_id) — the JSON
             # may contain duplicates from older save logic.
+            self._set_progress(46, "Deduplicating sections")
             _seen = set()
             _deduped = []
             for _s in self.accumulated_volume_sections:
@@ -9765,15 +9834,21 @@ Important:
             self.log_to_console(f"🎨 Restoring visualizations for {total_sections} sections...")
             if self.plotter is not None:
                 self.plotter.suppress_rendering = True
-            for section_info in self.accumulated_volume_sections:
+            n_sections = len(self.accumulated_volume_sections)
+            for i, section_info in enumerate(self.accumulated_volume_sections):
                 self._restore_section_visualization(section_info)
+                if i % max(1, n_sections // 25) == 0:
+                    self._set_progress(55 + int(40 * i / max(1, n_sections)),
+                                       f"Restoring circles {i}/{n_sections}")
             if self.plotter is not None:
                 self.plotter.suppress_rendering = False
                 self.plotter.render()
+            self._set_progress(97, "Finalizing")
             self.log_to_console(f"✅ Visualization restoration complete")
 
             # --- Restore trunk DBH overlays and volume info text (same as calculate_volume_from_selection) ---
             # Determine if any loaded section is branch mode (has branch_id)
+            self._set_progress(96, "Building summaries")
             has_branch_mode = any(s.get('branch_id') is not None for s in self.accumulated_volume_sections)
 
             # Build trunk volume summary and log to console
@@ -9860,6 +9935,9 @@ Important:
                                     name='volume_info_text')
                 self.plotter.update()
 
+            self._set_progress(100, "Done")
+            self.progress_bar.setVisible(False)
+
             QMessageBox.information(self, "Load Successful",
                                   f"Volume data loaded from {len(tree_files)} files in {folder}\n"
                                   f"Trees: {total_trees}\n"
@@ -9867,6 +9945,7 @@ Important:
                                   f"Total volume: {total_volume:.4f} m³")
 
         except Exception as e:
+            self.progress_bar.setVisible(False)
             QMessageBox.warning(self, "Load Error", f"Error loading volume data: {str(e)}")
             print(f"Load volume data error: {e}")
 
@@ -9895,18 +9974,12 @@ Important:
                 #                     name=f'dbh_trajectory_tree_{tree_id}_section_{section_id}',
                 #                     label=f'Tree {tree_id} - Section {section_id} Trajectory')
 
-                # Create individual circles and merge into single mesh for better performance
+                # Build all individual circles in ONE vectorized pass and merge once.
+                # (Previously each circle was created with pv.Circle + translate and
+                # merged pairwise with `mesh + mesh`, which is O(n²) and very slow
+                # when restoring many sections.)
                 if len(circle_data['circles']) > 0:
-                    individual_circles = []
-                    for center, radius in circle_data['circles']:
-                        circle = pv.Circle(radius=radius, resolution=32)
-                        circle.translate([center[0], center[1], center[2]], inplace=True)
-                        individual_circles.append(circle)
-
-                    # Merge all individual circles into single mesh
-                    merged_individual = individual_circles[0].copy()
-                    for circle in individual_circles[1:]:
-                        merged_individual = merged_individual + circle
+                    merged_individual = self._build_circles_mesh(circle_data['circles'])
 
                     self.plotter.add_mesh(merged_individual, color=circle_color, style='wireframe', line_width=2, opacity=0.9,
                                         name=f'dbh_individual_circles_tree_{tree_id}_section_{section_id}',
@@ -9917,18 +9990,13 @@ Important:
                     avg_color = 'red'
                     avg_center = circle_data['avg_center']
 
-                    # Create average circles and merge into single mesh for better performance
-                    avg_circles = []
-                    for center, _ in circle_data['circles']:
-                        height_z = center[2]
-                        avg_circle = pv.Circle(radius=circle_data['avg_radius'], resolution=32)
-                        avg_circle.translate([center[0], center[1], height_z], inplace=True)
-                        avg_circles.append(avg_circle)
-
-                    # Merge all average circles into single mesh
-                    merged_average = avg_circles[0].copy()
-                    for circle in avg_circles[1:]:
-                        merged_average = merged_average + circle
+                    # Build all average circles in one vectorized pass (same radius,
+                    # centered at avg_center XY at each circle's height).
+                    avg_specs = [
+                        (center, circle_data['avg_radius'])
+                        for center, _ in circle_data['circles']
+                    ]
+                    merged_average = self._build_circles_mesh(avg_specs)
 
                     self.plotter.add_mesh(merged_average, color=avg_color, style='wireframe', line_width=3, opacity=0.9,
                                         name=f'dbh_avg_circles_tree_{tree_id}_section_{section_id}',
@@ -9945,6 +10013,45 @@ Important:
 
         except Exception as e:
             print(f"Error restoring section {section_id} visualization: {e}")
+
+    @staticmethod
+    def _build_circles_mesh(circle_specs, resolution=32):
+        """Build a single merged PolyData containing many circles, vectorized.
+
+        circle_specs: iterable of (center_xyz, radius).
+        Much faster than creating pv.Circle per circle and merging pairwise.
+        """
+        circle_specs = list(circle_specs)
+        if not circle_specs:
+            return pv.PolyData()
+
+        centers = np.asarray([c for c, _ in circle_specs], dtype=float)
+        radii = np.asarray([r for _, r in circle_specs], dtype=float)
+        n = len(circle_specs)
+
+        # Unit-circle template (XY plane, z=0)
+        theta = np.linspace(0.0, 2.0 * np.pi, resolution, endpoint=False)
+        cos_t = np.cos(theta)
+        sin_t = np.sin(theta)
+
+        # Vertex positions: n circles × resolution points, scaled and translated
+        pts = np.empty((n * resolution, 3), dtype=float)
+        pts[:, 0] = np.repeat(centers[:, 0], resolution) + np.tile(cos_t, n) * np.repeat(radii, resolution)
+        pts[:, 1] = np.repeat(centers[:, 1], resolution) + np.tile(sin_t, n) * np.repeat(radii, resolution)
+        pts[:, 2] = np.repeat(centers[:, 2], resolution)
+
+        # Line cells forming closed loops (VTK polyline format)
+        lines = np.empty((n, resolution + 1), dtype=np.int64)
+        lines[:, 0] = resolution
+        idx = np.arange(n * resolution).reshape(n, resolution)
+        lines[:, 1:] = np.roll(idx, shift=-1, axis=1)
+        lines[:, 1] = idx[:, 0]  # close the loop back to the first point
+        lines_flat = lines.reshape(-1)
+
+        mesh = pv.PolyData()
+        mesh.points = pts
+        mesh.lines = lines_flat
+        return mesh
 
     def get_visualized_tree_ids(self):
         """Get the tree IDs that are currently being visualized.

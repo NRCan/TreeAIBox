@@ -36541,3 +36541,13 @@ Data subsample file produced:
    1152549 points
 Run finished: Fri Aug  7 19:33:34 2026 (elapsed time: 0 seconds)
 Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: "C:\Users\W0491597\Documents\Arun\TreeAIBox (2)\TreeAIBox\Fusion\PolyClipData.exe"  /verbose /shape:1,110.49438685100 "D:/Enhanced Forest Inventory/Data/New DataStore/ClipPolygon/Transect Ploygon\ClipPolygonTransect.shp" "D:/Enhanced Forest Inventory/Data/New DataStore/ClipPolygon/Transect Ploygon\clipped_to_polygon\clipped_110.494386851_20250407_LLR_L2_AllPoints_Orthometric_crownoff.las" "D:/Enhanced Forest Inventory/Data/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric_crownoff.las"
+Run started: Mon Aug 10 10:52:27 2026
+   D:/Enhanced Forest Inventory/Data/New DataStore/2025/LeafOFF/20250407_LLR_L2_AllPoints_Orthometric_crownoff.las: 179706463 points
+Problems with polygon overlay: D:/Enhanced Forest Inventory/Data/New DataStore/ClipPolygon/Transect Ploygon\ClipPolygonTransect.shp...aborting
+Run finished: Mon Aug 10 10:52:27 2026 (elapsed time: 0 seconds)
+***There were errors during the run
+Done
