@@ -513,6 +513,19 @@ class BatchTrunkParamsDialog(QDialog):
         h5.addWidget(self.full_assign)
         layout.addLayout(h5)
 
+        # DBH reference height (m) — asked here too so batch always uses an
+        # explicit value even if the user forgot to set it in the main window.
+        h6 = QHBoxLayout()
+        h6.addWidget(QLabel("DBH reference height (m):"))
+        self.dbh_height = QDoubleSpinBox()
+        self.dbh_height.setRange(0.1, 10.0)
+        self.dbh_height.setSingleStep(0.1)
+        self.dbh_height.setDecimals(2)
+        self.dbh_height.setValue(float(self.defaults.get('dbh_reference_height', 1.3)))
+        self.dbh_height.setToolTip("DBH reference height above ground (standard: 1.3m). Used for DBH calculation and export location/DBH details.")
+        h6.addWidget(self.dbh_height)
+        layout.addLayout(h6)
+
         btns = QHBoxLayout()
         ok = ModernButton("OK")
         ok.clicked.connect(self.accept)
@@ -531,7 +544,8 @@ class BatchTrunkParamsDialog(QDialog):
             'merge_dist_m': float(self.merge_dist.value()),
             'min_trunk_points': int(self.min_trunk_points.value()),
             'min_vertical_span_m': float(self.min_span.value()),
-            'full_height_assign_dist_m': float(self.full_assign.value())
+            'full_height_assign_dist_m': float(self.full_assign.value()),
+            'dbh_reference_height': float(self.dbh_height.value())
         }
 
 
@@ -883,6 +897,7 @@ class TreeVisualizerGUI(QMainWindow):
         self.last_analyzed_points = None  # Store points from last AI analysis for noise conversion
         self.tree_centroids_cache = {}  # Cache for tree centroids to speed up neighbor calculations
         self.centroids_kdtree = None  # KDTree for fast spatial queries
+        self.centroids_kdtree_tree_ids = None  # Tree IDs in the same row order as centroids_kdtree
         
         # Trunk detection variables (Phase 1)
         self.trunk_assignment = None  # Array: -1 = noise, >=0 = trunk_id
@@ -3671,202 +3686,6 @@ class TreeVisualizerGUI(QMainWindow):
             print(f"Error in create_tree_crown_polygon: {str(e)}")
             QMessageBox.critical(self, "Error", f"Failed to create tree crown polygon: {str(e)}")
 
-
-    def refresh_color_combo_box(self):
-        """Refresh the color combo box to include newly added scalar fields like DBH points."""
-        if self.las_data is None:
-            return
-
-        try:
-            # Get current selection
-            current_selection = self.color_combo.currentText()
-
-            # Temporarily disconnect the signal to avoid triggering update_tree_colors with empty field
-            self.color_combo.currentTextChanged.disconnect(self.update_tree_colors)
-
-            # Populate color field combo box with updated fields
-            available_fields = list(self.las_data.point_format.dimension_names)
-            color_fields = [field for field in available_fields
-                           if field not in ['x', 'y', 'z']]  # Include itc for multiple tree coloring
-
-            self.color_combo.clear()
-            self.color_combo.addItem("Default (green)")
-            for field in sorted(color_fields):
-                self.color_combo.addItem(field)
-
-            # Restore previous selection if it still exists
-            if current_selection and current_selection != "Default (green)":
-                index = self.color_combo.findText(current_selection)
-                if index >= 0:
-                    self.color_combo.setCurrentIndex(index)
-                else:
-                    # If previous selection no longer exists, select DBH points if available
-                    dbh_index = self.color_combo.findText("dbh_points")
-                    if dbh_index >= 0:
-                        self.color_combo.setCurrentIndex(dbh_index)
-                        self.log_to_console("🎨 Switched to 'dbh_points' coloring")
-
-            # Reconnect the signal
-            self.color_combo.currentTextChanged.connect(self.update_tree_colors)
-
-            self.log_to_console("✅ Color options updated - 'dbh_points' now available for coloring")
-
-        except Exception as e:
-            # Make sure to reconnect the signal even if there's an error
-            try:
-                self.color_combo.currentTextChanged.connect(self.update_tree_colors)
-            except:
-                pass
-            self.log_to_console(f"⚠️ Could not refresh color combo box: {str(e)}")
-
-
-    def view_neighbors(self):
-        """Find and visualize neighboring trees within the specified radius."""
-        if self.las_data is None:
-            print("Error: No LAS file loaded")
-            QMessageBox.warning(self, "Warning", "No LAS file loaded.")
-            return
-
-        selected_tree_ids = self.get_selected_tree_ids()
-        if not selected_tree_ids:
-            print("Warning: No trees selected for neighbor search")
-            QMessageBox.warning(self, "Warning", "Please select one or more trees first.")
-            return
-
-        try:
-            radius = float(self.neighbor_radius_input.text())
-            if radius <= 0 or radius > 1000:
-                raise ValueError("Radius must be between 0.1 and 1000 meters")
-        except ValueError as e:
-            print(f"Error: Invalid radius value: {str(e)}")
-            QMessageBox.warning(self, "Invalid Radius", f"Please enter a valid radius.\nError: {e}")
-            return
-
-        try:
-            # Ensure centroids are pre-computed (lazy loading)
-            if not self.tree_centroids_cache:
-                print("Pre-computing tree centroids for neighbor search...")
-                self.progress_bar.setVisible(True)
-                self.progress_bar.setRange(0, 0)  # Indeterminate progress
-                self.precompute_tree_centroids()
-                self.progress_bar.setVisible(False)
-                print("Centroid pre-computation completed")
-
-            # Calculate centroid of selected trees
-            reference_centroid = self.calculate_trees_centroid(selected_tree_ids)
-            if reference_centroid is None:
-                print("Error: Could not calculate centroid of selected trees")
-                QMessageBox.warning(self, "Error", "Could not calculate centroid of selected trees.")
-                return
-
-            print(f"Reference centroid: ({reference_centroid[0]:.2f}, {reference_centroid[1]:.2f})")
-
-            # Find neighboring trees using KDTree for fast spatial queries
-            neighbor_tree_ids = list(selected_tree_ids)  # Start with selected trees
-            
-            # Get centroids for all trees (excluding selected ones)
-            all_centroids = []
-            candidate_tree_ids = []
-            
-            for tree_id in self.unique_itc_values:
-                if tree_id not in selected_tree_ids and tree_id in self.tree_centroids_cache:
-                    all_centroids.append(self.tree_centroids_cache[tree_id])
-                    candidate_tree_ids.append(tree_id)
-            
-            if self.centroids_kdtree is not None and all_centroids:
-                # Use KDTree for efficient radius search
-                indices = self.centroids_kdtree.query_ball_point(reference_centroid, radius)
-                neighbor_tree_ids.extend([candidate_tree_ids[i] for i in indices])
-            elif all_centroids:
-                # Fallback to vectorized distance calculation if KDTree not available
-                centroids_array = np.array(all_centroids)
-                reference_centroid_array = np.array([reference_centroid])
-                
-                # Calculate distances using scipy's cdist for efficiency
-                distances = cdist(reference_centroid_array, centroids_array)[0]
-                
-                # Find trees within radius
-                within_radius = distances <= radius
-                neighbor_tree_ids.extend([candidate_tree_ids[i] for i in np.where(within_radius)[0]])
-            
-            # Fallback for any trees not in cache (shouldn't happen with precomputation)
-            for tree_id in self.unique_itc_values:
-                if tree_id in selected_tree_ids or tree_id in neighbor_tree_ids:
-                    continue
-                    
-                # Calculate centroid (fallback)
-                tree_centroid = self.calculate_tree_centroid(tree_id)
-                if tree_centroid is None:
-                    continue
-
-                # Check distance
-                distance = np.sqrt((tree_centroid[0] - reference_centroid[0])**2 + 
-                                 (tree_centroid[1] - reference_centroid[1])**2)
-
-                if distance <= radius:
-                    neighbor_tree_ids.append(tree_id)
-
-            if len(neighbor_tree_ids) == len(selected_tree_ids):
-                print(f"Warning: No additional neighbors found within {radius}m radius")
-                QMessageBox.information(self, "No Neighbors", f"No additional trees found within {radius}m radius.")
-                return
-
-            print(f"Found {len(neighbor_tree_ids)} trees within {radius}m radius (including {len(selected_tree_ids)} selected)")
-
-            # Select the neighbor trees in the list
-            self.tree_list.clearSelection()
-            for i in range(self.tree_list.count()):
-                item = self.tree_list.item(i)
-                try:
-                    tree_id = int(item.text())
-                    if tree_id in neighbor_tree_ids:
-                        item.setSelected(True)
-                except ValueError:
-                    continue
-
-            # Trigger visualization
-            self.visualize_tree()
-
-        except Exception as e:
-            print(f"Error in view_neighbors: {str(e)}")
-            QMessageBox.critical(self, "Error", f"Failed to find neighbors: {str(e)}")
-
-            # Temporarily disconnect the signal to avoid triggering update_tree_colors with empty field
-            self.color_combo.currentTextChanged.disconnect(self.update_tree_colors)
-
-            # Populate color field combo box with updated fields
-            available_fields = list(self.las_data.point_format.dimension_names)
-            color_fields = [field for field in available_fields
-                           if field not in ['x', 'y', 'z']]  # Include itc for multiple tree coloring
-
-            self.color_combo.clear()
-            self.color_combo.addItem("Default (green)")
-            for field in sorted(color_fields):
-                self.color_combo.addItem(field)
-
-            # Restore previous selection if it still exists
-            if current_selection and current_selection != "Default (green)":
-                index = self.color_combo.findText(current_selection)
-                if index >= 0:
-                    self.color_combo.setCurrentIndex(index)
-                else:
-                    # If previous selection no longer exists, select DBH points if available
-                    dbh_index = self.color_combo.findText("dbh_points")
-                    if dbh_index >= 0:
-                        self.color_combo.setCurrentIndex(dbh_index)
-                        self.log_to_console("🎨 Switched to 'dbh_points' coloring")
-
-            # Reconnect the signal
-            self.color_combo.currentTextChanged.connect(self.update_tree_colors)
-
-            self.log_to_console("✅ Color options updated - 'dbh_points' now available for coloring")
-
-        except Exception as e:
-            # Make sure to reconnect the signal even if there's an error
-            try:
-                self.color_combo.currentTextChanged.connect(self.update_tree_colors)
-            except:
-                pass
     def refresh_color_combo_box(self):
         """Refresh the color combo box to include newly added scalar fields like DBH points."""
         if self.las_data is None:
@@ -3970,7 +3789,15 @@ class TreeVisualizerGUI(QMainWindow):
             if self.centroids_kdtree is not None and all_centroids:
                 # Use KDTree for efficient radius search
                 indices = self.centroids_kdtree.query_ball_point(reference_centroid, radius)
-                neighbor_tree_ids.extend([candidate_tree_ids[i] for i in indices])
+                # Map KDTree row indices back to tree IDs using the ordering the
+                # KDTree was built from (NOT candidate_tree_ids — the KDTree is
+                # built from the whole cache, so the two orders differ).
+                kdtree_ids = getattr(self, 'centroids_kdtree_tree_ids', None) or list(self.tree_centroids_cache.keys())
+                for _i in indices:
+                    if 0 <= _i < len(kdtree_ids):
+                        _tid = kdtree_ids[_i]
+                        if _tid not in neighbor_tree_ids:
+                            neighbor_tree_ids.append(_tid)
             elif all_centroids:
                 # Fallback to vectorized distance calculation if KDTree not available
                 centroids_array = np.array(all_centroids)
@@ -4132,6 +3959,9 @@ class TreeVisualizerGUI(QMainWindow):
         if self.tree_centroids_cache:
             centroids_array = np.array(list(self.tree_centroids_cache.values()))
             self.centroids_kdtree = KDTree(centroids_array)
+            # Record the tree IDs in the SAME row order the KDTree was built
+            # from, so query indices can be mapped back to tree IDs correctly.
+            self.centroids_kdtree_tree_ids = list(self.tree_centroids_cache.keys())
             print(f"Built KDTree with {len(centroids_array)} centroids")
         
         print(f"Pre-computed centroids for {len(self.tree_centroids_cache)} trees using {num_workers} parallel workers")
@@ -4141,6 +3971,7 @@ class TreeVisualizerGUI(QMainWindow):
         if self.las_data is not None and len(self.unique_itc_values) > 0:
             self.tree_centroids_cache = {}
             self.centroids_kdtree = None
+            self.centroids_kdtree_tree_ids = None
             print("Cleared centroids cache due to filter change (will be recomputed on next neighbor search)")
 
     def calculate_tree_centroid(self, tree_id):
@@ -5200,7 +5031,11 @@ class TreeVisualizerGUI(QMainWindow):
             skip_opts = skip_dialog.get_options()
             self.log_to_console(f"🔧 Batch skip options: {skip_opts}")
 
-            trunk_dialog = BatchTrunkParamsDialog(self, defaults=getattr(self, 'trunk_detection_params', {}))
+            # Pre-fill the batch trunk dialog defaults with the current
+            # main-window DBH reference height so the field shows the existing value.
+            _batch_trunk_defaults = dict(getattr(self, 'trunk_detection_params', {}))
+            _batch_trunk_defaults['dbh_reference_height'] = float(getattr(self, 'dbh_reference_height', 1.3))
+            trunk_dialog = BatchTrunkParamsDialog(self, defaults=_batch_trunk_defaults)
             if trunk_dialog.exec() == QDialog.Accepted:
                 new_trunk_params = trunk_dialog.get_params()
                 # Update UI widgets so detection uses these params
@@ -5213,11 +5048,27 @@ class TreeVisualizerGUI(QMainWindow):
                     self.trunk_min_points_input.setValue(int(new_trunk_params.get('min_trunk_points', 120)))
                     self.trunk_min_span_input.setValue(float(new_trunk_params.get('min_vertical_span_m', 1.0)))
                     self.trunk_full_assign_input.setValue(float(new_trunk_params.get('full_height_assign_dist_m', 0.45)))
+                    # Apply the DBH reference height from the dialog so batch
+                    # uses what the user entered even if they forgot to set it
+                    # in the main window. Setting the spinbox also syncs
+                    # self.dbh_reference_height via its valueChanged handler.
+                    _batch_dbh_h = new_trunk_params.get('dbh_reference_height')
+                    if _batch_dbh_h is not None:
+                        if hasattr(self, 'dbh_height_input'):
+                            self.dbh_height_input.setValue(float(_batch_dbh_h))
+                        else:
+                            self.dbh_reference_height = float(_batch_dbh_h)
+                        self.log_to_console(
+                            f"📏 Batch DBH reference height set to: {float(_batch_dbh_h):.2f}m"
+                        )
                     # Also update internal dict
                     self.trunk_detection_params.update(new_trunk_params)
                     self.log_to_console("🔧 Trunk detection parameters updated for batch run")
                 except Exception:
                     pass
+            else:
+                self.log_to_console("ℹ️ Batch cancelled by user (trunk parameters)")
+                return
 
             branch_dialog = BatchBranchParamsDialog(self, defaults={
                 'slice_height_cm': getattr(self, 'slice_height_input', None) and int(self.slice_height_input.value()) or 25,
@@ -5235,6 +5086,9 @@ class TreeVisualizerGUI(QMainWindow):
                     self.log_to_console("🔧 Branch detection parameters updated for batch run")
                 except Exception:
                     pass
+            else:
+                self.log_to_console("ℹ️ Batch cancelled by user (branch parameters)")
+                return
 
             # Step 2: Get all tree IDs in sorted order (first to last)
             all_forest_ids = sorted(self.unique_itc_values.tolist())
@@ -5713,7 +5567,23 @@ class TreeVisualizerGUI(QMainWindow):
                         'timestamp': str(pd.Timestamp.now()) if 'pd' in globals() else str(datetime.now()),
                         'sections': []
                     }
-                
+
+                # Record the tree base Z used for DBH (derived from the saved
+                # DBH target Z minus the reference height) so reloaded data can
+                # reproduce the original DBH reference height without needing
+                # the tree visualized again.
+                _cd = section.get('circle_data') or {}
+                _dbh_target_z = _cd.get('dbh_target_z')
+                try:
+                    _base_z = float(_dbh_target_z) - float(getattr(self, 'dbh_reference_height', 1.3)) if _dbh_target_z is not None else None
+                except (ValueError, TypeError):
+                    _base_z = None
+                if _base_z is None:
+                    try:
+                        _base_z = float(_cd.get('min_z')) if _cd.get('min_z') is not None else None
+                    except (ValueError, TypeError):
+                        _base_z = None
+
                 section_data = {
                     'section_id': section['section_id'],
                     'trunk_id': section.get('trunk_id'),
@@ -5723,6 +5593,7 @@ class TreeVisualizerGUI(QMainWindow):
                     'circle_color': section['circle_color'],
                     'num_points': len(section['points']),
                     'circle_data': section['circle_data'],
+                    'tree_base_z': _base_z,
                     'extrapolated': section.get('extrapolated', False),
                     'original_height_range': section.get('original_height_range'),
                     'extrapolated_height_range': section.get('extrapolated_height_range'),
@@ -6044,6 +5915,19 @@ class TreeVisualizerGUI(QMainWindow):
             save_path = os.path.join(export_dir, f"{las_basename}_trunk_metrics.csv")
 
             rows = []
+            # Build a lookup of DBH records by (tree_id, trunk_id) composite key.
+            # These records are exactly what the blue trunk-DBH circles are drawn from,
+            # so the export stays consistent with the visualized blue circles.
+            dbh_by_key = {}
+            for composite_key, dbh_rec in (trunk_dbh_details or {}).items():
+                try:
+                    key_parts = str(composite_key).rsplit('_', 1)
+                    dbh_by_key[(key_parts[0], int(key_parts[1]))] = dbh_rec
+                except (ValueError, TypeError, IndexError):
+                    continue
+
+            dbh_ref_height = float(getattr(self, 'dbh_reference_height', 1.3))
+
             for trunk_id in sorted(trunk_summary.keys(), key=lambda x: (isinstance(x, str), x)):
                 # Skip non-numeric trunk IDs (e.g., 'Multiple Trunks (26)')
                 try:
@@ -6053,34 +5937,6 @@ class TreeVisualizerGUI(QMainWindow):
                     continue
 
                 summary_rec = trunk_summary[trunk_id]
-                dbh_cm = trunk_dbh_summary.get(trunk_id)
-                dbh_rec = trunk_dbh_details.get(trunk_id, {})
-
-                center_xyz = dbh_rec.get('center_xyz')
-                location_source = dbh_rec.get('section_id', 'section_avg_center')
-
-                if center_xyz is None:
-                    # Fallback location from section average centers for this trunk.
-                    centers = []
-                    z_refs = []
-                    for sec in self.accumulated_volume_sections:
-                        if sec.get('trunk_id', None) != trunk_id:
-                            continue
-                        circle_data = sec.get('circle_data') or {}
-                        avg_center = circle_data.get('avg_center')
-                        if avg_center is not None and len(avg_center) >= 2:
-                            centers.append([float(avg_center[0]), float(avg_center[1])])
-                            z_refs.append(float(circle_data.get('min_z', 0.0)))
-
-                    if centers:
-                        centers_arr = np.array(centers, dtype=float)
-                        center_xyz = [
-                            float(np.mean(centers_arr[:, 0])),
-                            float(np.mean(centers_arr[:, 1])),
-                            float(np.mean(z_refs)) if z_refs else 0.0,
-                        ]
-                    else:
-                        center_xyz = [None, None, None]
 
                 # Collect associated tree IDs from accumulated sections for this trunk
                 tree_ids = []
@@ -6150,22 +6006,106 @@ class TreeVisualizerGUI(QMainWindow):
                     except Exception:
                         pass
 
+                # Find the DBH record (blue circle) for this trunk. Trunk IDs can
+                # repeat across trees, so prefer matching by (tree_id, trunk_id).
+                dbh_rec = None
+                primary_tree = tree_ids[0] if tree_ids else None
+                if primary_tree is not None:
+                    dbh_rec = dbh_by_key.get((str(primary_tree), trunk_id_int))
+                if dbh_rec is None:
+                    for (_tree_key, _trunk_key), _rec in dbh_by_key.items():
+                        if _trunk_key == trunk_id_int:
+                            dbh_rec = _rec
+                            if primary_tree is None:
+                                primary_tree = _tree_key
+                            break
+
+                dbh_cm = dbh_rec.get('dbh_cm') if dbh_rec else None
+                dbh_section = dbh_rec.get('section_id', '') if dbh_rec else ''
+                # DBH method: 'dbh_height' when a section contains the DBH
+                # reference height; 'closest_section_fallback' when no trunk
+                # points existed at that height and the closest section was used.
+                if dbh_rec is None:
+                    dbh_method = 'no_dbh_circle'
+                elif dbh_rec.get('priority', 1) == 0:
+                    dbh_method = 'dbh_height'
+                else:
+                    dbh_method = 'closest_section_fallback'
+
+                # Location = centroid of the blue DBH circle when available.
+                center_xyz = dbh_rec.get('center_xyz') if dbh_rec else None
+                location_source = 'dbh_circle' if center_xyz is not None else 'section_avg_center'
+
+                if center_xyz is None:
+                    # Fallback location from section average centers for this trunk.
+                    centers = []
+                    z_refs = []
+                    for sec in self.accumulated_volume_sections:
+                        if sec.get('trunk_id', None) != trunk_id:
+                            continue
+                        circle_data = sec.get('circle_data') or {}
+                        avg_center = circle_data.get('avg_center')
+                        if avg_center is not None and len(avg_center) >= 2:
+                            centers.append([float(avg_center[0]), float(avg_center[1])])
+                            z_refs.append(float(circle_data.get('min_z', 0.0)))
+
+                    if centers:
+                        centers_arr = np.array(centers, dtype=float)
+                        center_xyz = [
+                            float(np.mean(centers_arr[:, 0])),
+                            float(np.mean(centers_arr[:, 1])),
+                            float(np.mean(z_refs)) if z_refs else 0.0,
+                        ]
+                    else:
+                        center_xyz = [None, None, None]
+
                 try:
                     rows.append({
                         'tree_ids': resolved_tree_ids,
                         'trunk_id': trunk_id_int,
+                        'section': dbh_section,
+                        'dbh_method': dbh_method,
+                        'dbh_ref_height_m': dbh_ref_height,
                         'location_x_m': center_xyz[0],
                         'location_y_m': center_xyz[1],
                         'location_z_m': center_xyz[2],
                         'location_source': location_source,
                         'total_volume_m3': float(summary_rec.get('total_volume', 0.0)),
                         'dbh_cm': float(dbh_cm) if dbh_cm is not None else None,
-                        'dbh_source': dbh_rec.get('section_id', ''),
                         'num_branches': int(summary_rec.get('num_branches', 0)),
                         'total_points': int(summary_rec.get('total_points', 0)),
                     })
                 except (ValueError, TypeError) as row_err:
                     self.log_to_console(f"⚠️ Skipping trunk {trunk_id} due to conversion error: {row_err}")
+                    continue
+
+            # Also include any trunk that has a blue DBH circle but no volume
+            # summary row, so the report is complete relative to the circles shown.
+            for (dbh_tree_key, dbh_trunk_key), dbh_rec in dbh_by_key.items():
+                if dbh_trunk_key in trunk_summary:
+                    continue
+                dbh_cm = dbh_rec.get('dbh_cm')
+                center_xyz = dbh_rec.get('center_xyz')
+                dbh_section = dbh_rec.get('section_id', '')
+                dbh_method = 'dbh_height' if dbh_rec.get('priority', 1) == 0 else 'closest_section_fallback'
+                try:
+                    rows.append({
+                        'tree_ids': dbh_tree_key,
+                        'trunk_id': dbh_trunk_key,
+                        'section': dbh_section,
+                        'dbh_method': dbh_method,
+                        'dbh_ref_height_m': dbh_ref_height,
+                        'location_x_m': float(center_xyz[0]) if center_xyz and len(center_xyz) >= 2 else None,
+                        'location_y_m': float(center_xyz[1]) if center_xyz and len(center_xyz) >= 2 else None,
+                        'location_z_m': float(center_xyz[2]) if center_xyz and len(center_xyz) >= 3 else None,
+                        'location_source': 'dbh_circle',
+                        'total_volume_m3': 0.0,
+                        'dbh_cm': float(dbh_cm) if dbh_cm is not None else None,
+                        'num_branches': 0,
+                        'total_points': 0,
+                    })
+                except (ValueError, TypeError) as row_err:
+                    self.log_to_console(f"⚠️ Skipping DBH-only trunk {dbh_trunk_key} due to conversion error: {row_err}")
                     continue
 
             import csv
@@ -6233,8 +6173,9 @@ class TreeVisualizerGUI(QMainWindow):
             with open(save_path, 'w', newline='') as f:
                 fieldnames = [
                     'tree_ids', 'trunk_id',
+                    'section', 'dbh_method', 'dbh_ref_height_m',
                     'location_x_m', 'location_y_m', 'location_z_m', 'location_source',
-                    'total_volume_m3', 'dbh_cm', 'dbh_source',
+                    'total_volume_m3', 'dbh_cm',
                     'num_branches', 'total_points'
                 ]
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -9138,7 +9079,10 @@ Important:
             trunk_id = section.get('trunk_id', None)
             branch_id = section.get('branch_id', None)
             volume = float(section.get('volume', 0.0) or 0.0)
-            num_points = len(section.get('points', []))
+            # Use the saved point count when available (reloaded data has an
+            # empty points array but retains num_points from the JSON).
+            _saved_num_points = section.get('num_points')
+            num_points = int(_saved_num_points) if _saved_num_points is not None else len(section.get('points', []))
 
             if trunk_id is None:
                 # If no trunk id is present, skip from the trunk table rather than inventing one.
@@ -9227,6 +9171,28 @@ Important:
                 f"Z=[{z_min_str}, {z_max_str}] avg_R={avg_r_str}"
             )
 
+            # Per-section DBH target Z: prefer the tree base Z recorded when the
+            # section was processed (saved in the JSON), so reloaded data
+            # reproduces the original DBH reference height even when no tree is
+            # currently visualized. Falls back to the saved circle_data target Z,
+            # then to the global tree base Z.
+            _saved_base = section.get('tree_base_z')
+            if _saved_base is not None:
+                try:
+                    section_tree_base_z = float(_saved_base)
+                except (ValueError, TypeError):
+                    section_tree_base_z = tree_base_z
+            else:
+                _saved_target = circle_data.get('dbh_target_z')
+                if _saved_target is not None:
+                    try:
+                        section_tree_base_z = float(_saved_target) - target_height
+                    except (ValueError, TypeError):
+                        section_tree_base_z = tree_base_z
+                else:
+                    section_tree_base_z = tree_base_z
+            section_dbh_target_z = section_tree_base_z + target_height
+
             candidate = None
 
             if (avg_radius is not None and avg_center is not None and len(avg_center) >= 2
@@ -9236,33 +9202,33 @@ Important:
                 except (ValueError, TypeError):
                     _sec_num = 0
 
-                # Use XY of the individual circle closest to dbh_target_z
+                # Use XY of the individual circle closest to section_dbh_target_z
                 # so the blue circle aligns with the red circle at that height.
                 circles = circle_data.get('circles', [])
                 best_xy = avg_center  # fallback to section average XY
-                best_z = dbh_target_z  # fallback to the DBH height
+                best_z = section_dbh_target_z  # fallback to the DBH height
                 best_dist = float('inf')
                 if circles and len(circles) > 0:
                     for center, _radius in circles:
-                        dist = abs(center[2] - dbh_target_z)
+                        dist = abs(center[2] - section_dbh_target_z)
                         if dist < best_dist:
                             best_dist = dist
                             best_xy = [center[0], center[1]]
                             best_z = float(center[2])
 
-                if section_min_z <= dbh_target_z <= section_max_z:
+                if section_min_z <= section_dbh_target_z <= section_max_z:
                     # Trunk has points at the DBH height: draw the blue circle
                     # at the DBH height itself.
                     candidate = {
                         'tree_id': str(tree_id),
                         'dbh_cm': float(avg_radius) * 2.0 * 100.0,
                         'radius_m': float(avg_radius),
-                        'center_xyz': [float(best_xy[0]), float(best_xy[1]), float(dbh_target_z)],
+                        'center_xyz': [float(best_xy[0]), float(best_xy[1]), float(section_dbh_target_z)],
                         'score': 0.0,
                         'priority': 0,
                         'section_id': f"section_avg@{sec_id}",
                         'branch_id': self._to_local_branch_id(branch_id),
-                        'dbh_target_z': float(dbh_target_z),
+                        'dbh_target_z': float(section_dbh_target_z),
                         '_sec_num': int(_sec_num),
                     }
                     debug_logs.append(
@@ -9274,7 +9240,7 @@ Important:
                     # height still get a blue DBH circle drawn. The circle is
                     # drawn at the actual closest circle's Z for realism.
                     fallback_key = f"{str(tree_id)}_{int(trunk_id)}"
-                    fallback_dist = abs(section_min_z - dbh_target_z) if dbh_target_z < section_min_z else abs(section_max_z - dbh_target_z)
+                    fallback_dist = abs(section_min_z - section_dbh_target_z) if section_dbh_target_z < section_min_z else abs(section_max_z - section_dbh_target_z)
                     fallback_candidate = {
                         'tree_id': str(tree_id),
                         'dbh_cm': float(avg_radius) * 2.0 * 100.0,
@@ -9284,7 +9250,7 @@ Important:
                         'priority': 1,
                         'section_id': f"section_avg@{sec_id}",
                         'branch_id': self._to_local_branch_id(branch_id),
-                        'dbh_target_z': float(dbh_target_z),
+                        'dbh_target_z': float(section_dbh_target_z),
                         '_sec_num': int(_sec_num),
                         '_fallback_dist': float(fallback_dist),
                     }
@@ -9293,7 +9259,7 @@ Important:
                         closest_fallback[fallback_key] = fallback_candidate
                     debug_logs.append(
                         f"   ⏳ FALLBACK candidate for {fallback_key}: Z range [{z_min_str}, {z_max_str}] does NOT contain "
-                        f"dbh_target_z={dbh_target_z:.2f} (closest circle dist={best_dist:.3f}m)"
+                        f"dbh_target_z={section_dbh_target_z:.2f} (closest circle dist={best_dist:.3f}m)"
                     )
             elif avg_radius is None:
                 debug_logs.append("   ❌ SKIPPED: no avg_radius")
@@ -9718,7 +9684,23 @@ Important:
                         'timestamp': str(pd.Timestamp.now()) if 'pd' in globals() else str(datetime.now()),
                         'sections': []
                     }
-                
+
+                # Record the tree base Z used for DBH (derived from the saved
+                # DBH target Z minus the reference height) so reloaded data can
+                # reproduce the original DBH reference height without needing
+                # the tree visualized again.
+                _cd = section.get('circle_data') or {}
+                _dbh_target_z = _cd.get('dbh_target_z')
+                try:
+                    _base_z = float(_dbh_target_z) - float(getattr(self, 'dbh_reference_height', 1.3)) if _dbh_target_z is not None else None
+                except (ValueError, TypeError):
+                    _base_z = None
+                if _base_z is None:
+                    try:
+                        _base_z = float(_cd.get('min_z')) if _cd.get('min_z') is not None else None
+                    except (ValueError, TypeError):
+                        _base_z = None
+
                 section_data = {
                     'section_id': section['section_id'],
                     'trunk_id': section.get('trunk_id'),
@@ -9728,6 +9710,7 @@ Important:
                     'circle_color': section['circle_color'],
                     'num_points': len(section['points']),
                     'circle_data': section['circle_data'],
+                    'tree_base_z': _base_z,
                     'extrapolated': section.get('extrapolated', False),
                     'original_height_range': section.get('original_height_range'),
                     'extrapolated_height_range': section.get('extrapolated_height_range'),
@@ -9990,6 +9973,8 @@ Important:
                                 'point_color': section_data['point_color'],
                                 'circle_color': section_data['circle_color'],
                                 'points': np.array([]),  # Empty array since we don't save point data
+                                'num_points': int(section_data.get('num_points', 0) or 0),
+                                'tree_base_z': section_data.get('tree_base_z'),
                                 'circle_data': section_data['circle_data']
                             }
                             self.accumulated_volume_sections.append(section_info)
