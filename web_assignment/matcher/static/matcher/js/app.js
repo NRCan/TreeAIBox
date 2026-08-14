@@ -17,6 +17,7 @@ let layerGroupField = null;
 let layerGroupBoundary = null;  // convex hull field boundary
 let currentResults = null;
 let lastBounds = null;
+let currentPointMarkers = [];   // Array of { marker, type: 'lidar'|'field', props, defaultTooltip }
 
 function initApp() {
     initTabs();
@@ -104,32 +105,32 @@ function initSliders() {
 // Leaflet GIS Map Initialization
 // ---------------------------------------------------------------------------
 function initMap() {
-    // Base tile layers with safe maxNativeZoom so deeper zooms (up to 22) smoothly scale
+    // Base tile layers with safe maxNativeZoom so deep zooms (up to 26) smoothly scale
     const esriSatellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
         attribution: 'Tiles &copy; Esri &mdash; Source: Esri, USDA, USGS',
         maxNativeZoom: 17,
-        maxZoom: 22,
+        maxZoom: 26,
         crossOrigin: 'anonymous'
     });
 
     const googleSatellite = L.tileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
         attribution: '&copy; Google Maps Satellite',
         maxNativeZoom: 18,
-        maxZoom: 22,
+        maxZoom: 26,
         crossOrigin: 'anonymous'
     });
 
     const cartoDark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
         attribution: '&copy; <a href="https://carto.com/">CARTO</a>',
         maxNativeZoom: 18,
-        maxZoom: 22,
+        maxZoom: 26,
         crossOrigin: 'anonymous'
     });
 
     const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '&copy; OpenStreetMap contributors',
         maxNativeZoom: 18,
-        maxZoom: 22,
+        maxZoom: 26,
         crossOrigin: 'anonymous'
     });
 
@@ -137,7 +138,7 @@ function initMap() {
     map = L.map('gisMap', {
         center: [44.9794, -65.0859],
         zoom: 17,
-        maxZoom: 22,
+        maxZoom: 26,
         layers: [esriSatellite]
     });
 
@@ -389,6 +390,45 @@ function bindEvents() {
     const btnSavePdf = document.getElementById('btnSavePdf');
     if (btnSavePdf) {
         btnSavePdf.addEventListener('click', saveExecutiveReportPdf);
+    }
+
+    // Point Labels Dropdown & Field Selection
+    const btnPointLabels = document.getElementById('btnPointLabels');
+    const menuPointLabels = document.getElementById('menuPointLabels');
+    if (btnPointLabels && menuPointLabels) {
+        btnPointLabels.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const isHidden = menuPointLabels.style.display === 'none';
+            menuPointLabels.style.display = isHidden ? 'flex' : 'none';
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!document.getElementById('pointLabelDropdownWrapper')?.contains(e.target)) {
+                menuPointLabels.style.display = 'none';
+            }
+        });
+
+        menuPointLabels.addEventListener('click', (e) => {
+            e.stopPropagation();
+        });
+    }
+
+    document.querySelectorAll('.chk-label-field').forEach(cb => {
+        cb.addEventListener('change', applyPointLabels);
+    });
+
+    document.querySelectorAll('input[name="pointLabelTarget"]').forEach(r => {
+        r.addEventListener('change', applyPointLabels);
+    });
+
+    const btnClearLabels = document.getElementById('btnClearLabels');
+    if (btnClearLabels) {
+        btnClearLabels.addEventListener('click', () => {
+            document.querySelectorAll('.chk-label-field').forEach(cb => {
+                cb.checked = false;
+            });
+            applyPointLabels();
+        });
     }
 }
 
@@ -723,6 +763,7 @@ function renderMapFeatures(geojson) {
     layerGroupLidar.clearLayers();
     layerGroupField.clearLayers();
     if (layerGroupBoundary) layerGroupBoundary.clearLayers();
+    currentPointMarkers = [];
 
     const bounds = [];
 
@@ -777,7 +818,8 @@ function renderMapFeatures(geojson) {
                 fillOpacity: 0.9
             });
 
-            circle.bindTooltip(`LiDAR #${p.tree_id}: ${p.height_m || 0}m, ${p.dbh_cm || 0}cm DBH`, { sticky: true });
+            const defaultHover = `LiDAR #${p.tree_id}: ${p.height_m || 0}m, ${p.dbh_cm || 0}cm DBH`;
+            circle.bindTooltip(defaultHover, { sticky: true });
 
             circle.bindPopup(`
                 <div class="popup-card">
@@ -791,6 +833,13 @@ function renderMapFeatures(geojson) {
             `);
 
             layerGroupLidar.addLayer(circle);
+
+            currentPointMarkers.push({
+                marker: circle,
+                type: 'lidar',
+                props: p,
+                defaultTooltip: defaultHover
+            });
 
         } else if (type === 'field_point') {
             const c = f.geometry.coordinates;
@@ -807,7 +856,8 @@ function renderMapFeatures(geojson) {
                 fillOpacity: 0.9
             });
 
-            circle.bindTooltip(`Field Tag #${p.field_id}: ${p.species || 'Tree'}, Class ${p.height_class}`, { sticky: true });
+            const defaultHover = `Field Tag #${p.field_id}: ${p.species || 'Tree'}, Class ${p.height_class}`;
+            circle.bindTooltip(defaultHover, { sticky: true });
 
             circle.bindPopup(`
                 <div class="popup-card">
@@ -821,6 +871,13 @@ function renderMapFeatures(geojson) {
             `);
 
             layerGroupField.addLayer(circle);
+
+            currentPointMarkers.push({
+                marker: circle,
+                type: 'field',
+                props: p,
+                defaultTooltip: defaultHover
+            });
         } else if (type === 'field_boundary') {
             // Convex hull boundary of field survey area — shown as dashed perimeter
             const ringCoords = f.geometry.coordinates[0];
@@ -844,19 +901,86 @@ function renderMapFeatures(geojson) {
         }
     });
 
+    applyPointLabels();
+
     if (bounds.length > 0) {
         lastBounds = bounds;
         map.fitBounds(L.latLngBounds(bounds), { padding: [40, 40] });
     }
+}
 
-    // Also populate and sync the Report Live Map
-    if (reportLayerGroup) {
-        reportLayerGroup.clearLayers();
-        layerGroupLines.eachLayer(l => reportLayerGroup.addLayer(L.polyline(l.getLatLngs(), l.options)));
-        layerGroupLidar.eachLayer(l => reportLayerGroup.addLayer(L.circleMarker(l.getLatLng(), l.options)));
-        layerGroupField.eachLayer(l => reportLayerGroup.addLayer(L.circleMarker(l.getLatLng(), l.options)));
-        fitReportMapExtents();
+// ---------------------------------------------------------------------------
+// Apply Dynamic Multi-Field Point Labels
+// ---------------------------------------------------------------------------
+function applyPointLabels() {
+    const checkedBoxes = Array.from(document.querySelectorAll('.chk-label-field:checked')).map(cb => cb.value);
+    const target = document.querySelector('input[name="pointLabelTarget"]:checked')?.value || 'all';
+
+    // Update badge & button state
+    const badge = document.getElementById('labelCountBadge');
+    const btn = document.getElementById('btnPointLabels');
+    if (badge) {
+        if (checkedBoxes.length > 0) {
+            badge.textContent = checkedBoxes.length;
+            badge.style.display = 'inline-block';
+            btn?.classList.add('active-filter');
+        } else {
+            badge.style.display = 'none';
+            btn?.classList.remove('active-filter');
+        }
     }
+
+    if (!currentPointMarkers || currentPointMarkers.length === 0) return;
+
+    currentPointMarkers.forEach(item => {
+        const isTargetMatch = (target === 'all') || (target === item.type);
+
+        if (checkedBoxes.length === 0 || !isTargetMatch) {
+            // Revert to standard hover tooltip
+            item.marker.unbindTooltip();
+            item.marker.bindTooltip(item.defaultTooltip, { sticky: true });
+            return;
+        }
+
+        // Build formatted label parts
+        const parts = [];
+        const p = item.props;
+        checkedBoxes.forEach(field => {
+            if (field === 'id') {
+                const idVal = (item.type === 'lidar') ? p.tree_id : p.field_id;
+                if (idVal !== undefined && idVal !== null) parts.push(`#${idVal}`);
+            } else if (field === 'dbh') {
+                if (p.dbh_cm !== undefined && p.dbh_cm !== null) parts.push(`${p.dbh_cm}cm`);
+            } else if (field === 'height_class') {
+                if (p.height_class !== undefined && p.height_class !== null) parts.push(`Cl:${p.height_class}`);
+            } else if (field === 'height') {
+                if (item.type === 'lidar' && p.height_m !== undefined && p.height_m !== null) {
+                    parts.push(`${p.height_m}m`);
+                } else if (item.type === 'field' && p.height_range) {
+                    parts.push(p.height_range);
+                }
+            } else if (field === 'species') {
+                if (p.species && p.species !== '-') parts.push(p.species);
+            } else if (field === 'volume') {
+                if (p.volume_m3 !== undefined && p.volume_m3 !== null) parts.push(`${p.volume_m3}m³`);
+            }
+        });
+
+        if (parts.length === 0) {
+            item.marker.unbindTooltip();
+            item.marker.bindTooltip(item.defaultTooltip, { sticky: true });
+            return;
+        }
+
+        const labelText = parts.join(' | ');
+        item.marker.unbindTooltip();
+        item.marker.bindTooltip(labelText, {
+            permanent: true,
+            direction: 'top',
+            className: `map-point-label map-point-label-${item.type}`,
+            offset: [0, -6]
+        }).openTooltip();
+    });
 }
 
 function fitMapExtents() {

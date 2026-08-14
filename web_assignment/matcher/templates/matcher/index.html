@@ -247,6 +247,33 @@
                         <label class="toggle-pill"><input type="checkbox" id="chkShowField" checked> <span class="orange-dot"></span> <span>Field Survey</span></label>
                     </div>
                     <div class="toolbar-right">
+                        <!-- Point Labels Dropdown -->
+                        <div class="dropdown-wrapper" id="pointLabelDropdownWrapper">
+                            <button type="button" class="btn-tool" id="btnPointLabels">
+                                <i class="fa-solid fa-tag"></i> Labels <span id="labelCountBadge" class="badge-mini" style="display:none;">0</span> <i class="fa-solid fa-chevron-down fa-xs" style="margin-left: 2px;"></i>
+                            </button>
+                            <div class="dropdown-menu-popover" id="menuPointLabels" style="display: none;">
+                                <div class="dropdown-header">
+                                    <span><i class="fa-solid fa-tags"></i> Point Labels</span>
+                                    <button type="button" class="btn-text-action" id="btnClearLabels">Clear All</button>
+                                </div>
+                                <div class="dropdown-section-title">Fields to Show:</div>
+                                <label class="dropdown-item-check"><input type="checkbox" class="chk-label-field" value="id"> <span>Tree / Tag ID</span></label>
+                                <label class="dropdown-item-check"><input type="checkbox" class="chk-label-field" value="dbh"> <span>DBH (cm)</span></label>
+                                <label class="dropdown-item-check"><input type="checkbox" class="chk-label-field" value="height_class"> <span>Height Class</span></label>
+                                <label class="dropdown-item-check"><input type="checkbox" class="chk-label-field" value="height"> <span>Height (m) / Range</span></label>
+                                <label class="dropdown-item-check"><input type="checkbox" class="chk-label-field" value="species"> <span>Species</span></label>
+                                <label class="dropdown-item-check"><input type="checkbox" class="chk-label-field" value="volume"> <span>Volume (m³)</span></label>
+                                <div class="dropdown-divider"></div>
+                                <div class="dropdown-section-title">Apply To:</div>
+                                <div class="radio-row">
+                                    <label class="toggle-pill"><input type="radio" name="pointLabelTarget" value="all" checked> <span>All</span></label>
+                                    <label class="toggle-pill"><input type="radio" name="pointLabelTarget" value="lidar"> <span>LiDAR</span></label>
+                                    <label class="toggle-pill"><input type="radio" name="pointLabelTarget" value="field"> <span>Field</span></label>
+                                </div>
+                            </div>
+                        </div>
+
                         <button class="btn-tool" id="btnToggleLegend"><i class="fa-solid fa-list"></i> Toggle Legend</button>
                         <button class="btn-tool" id="btnResetMapZoom" title="Fit to all trees"><i class="fa-solid fa-compress"></i> Fit Extents</button>
                     </div>
@@ -717,6 +744,6 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
-    <script src="/static/matcher/js/app.js?v=20260814k"></script>
+    <script src="/static/matcher/js/app.js?v=20260814m"></script>
 </body>
 </html>
