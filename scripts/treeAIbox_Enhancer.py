@@ -3282,6 +3282,10 @@ class TreeVisualizerGUI(QMainWindow):
                 tree_z_values = merged_points[:, 2]
                 ground_level = np.min(tree_z_values)
                 tree_height = bounds[5] - ground_level  # Tree height from ground to top
+                # Store the height for the currently visualized tree so it can be
+                # exported with trunk metrics.
+                self.current_tree_height = float(tree_height)
+                self.current_tree_ground_z = float(ground_level)
                 
                 print(f"📦 Bounding Box - Bottom Z: {bottom_z:.2f}m, Bounding Box Height: {bounding_box_height:.2f}m")
                 print(f"🌳 Tree Height (from ground): {tree_height:.2f}m (ground level: {ground_level:.2f}m)")
@@ -5290,6 +5294,10 @@ class TreeVisualizerGUI(QMainWindow):
             self.current_color_values = None
             self.current_color_field = "Default (green)"
 
+            # Store tree height (from ground to top) for export.
+            self.current_tree_height = float(np.max(points[:, 2]) - np.min(points[:, 2]))
+            self.current_tree_ground_z = float(np.min(points[:, 2]))
+
             # Visualize with green color
             self.plotter.add_points(points, color='green', point_size=3, name=f'trunk_tree_{tree_id}')
             self.plotter.reset_camera()
@@ -6022,6 +6030,7 @@ class TreeVisualizerGUI(QMainWindow):
 
                 dbh_cm = dbh_rec.get('dbh_cm') if dbh_rec else None
                 dbh_section = dbh_rec.get('section_id', '') if dbh_rec else ''
+                dbh_branch = dbh_rec.get('branch_id') if dbh_rec else None
                 # DBH method: 'dbh_height' when a section contains the DBH
                 # reference height; 'closest_section_fallback' when no trunk
                 # points existed at that height and the closest section was used.
@@ -6059,13 +6068,18 @@ class TreeVisualizerGUI(QMainWindow):
                     else:
                         center_xyz = [None, None, None]
 
+                # Tree height from the currently visualized tree (ground to top).
+                tree_height = getattr(self, 'current_tree_height', None)
+
                 try:
                     rows.append({
                         'tree_ids': resolved_tree_ids,
                         'trunk_id': trunk_id_int,
+                        'branch_id': dbh_branch,
                         'section': dbh_section,
                         'dbh_method': dbh_method,
                         'dbh_ref_height_m': dbh_ref_height,
+                        'tree_height_m': float(tree_height) if tree_height is not None else None,
                         'location_x_m': center_xyz[0],
                         'location_y_m': center_xyz[1],
                         'location_z_m': center_xyz[2],
@@ -6086,15 +6100,18 @@ class TreeVisualizerGUI(QMainWindow):
                     continue
                 dbh_cm = dbh_rec.get('dbh_cm')
                 center_xyz = dbh_rec.get('center_xyz')
-                dbh_section = dbh_rec.get('section_id', '')
+                dbh_branch = dbh_rec.get('branch_id')
                 dbh_method = 'dbh_height' if dbh_rec.get('priority', 1) == 0 else 'closest_section_fallback'
+                tree_height = getattr(self, 'current_tree_height', None)
                 try:
                     rows.append({
                         'tree_ids': dbh_tree_key,
                         'trunk_id': dbh_trunk_key,
+                        'branch_id': dbh_branch,
                         'section': dbh_section,
                         'dbh_method': dbh_method,
                         'dbh_ref_height_m': dbh_ref_height,
+                        'tree_height_m': float(tree_height) if tree_height is not None else None,
                         'location_x_m': float(center_xyz[0]) if center_xyz and len(center_xyz) >= 2 else None,
                         'location_y_m': float(center_xyz[1]) if center_xyz and len(center_xyz) >= 2 else None,
                         'location_z_m': float(center_xyz[2]) if center_xyz and len(center_xyz) >= 3 else None,
@@ -6171,8 +6188,8 @@ class TreeVisualizerGUI(QMainWindow):
             rows_to_write = [merged_by_trunk[k] for k in sorted(merged_by_trunk.keys(), key=lambda x: (x[0], int(x[1]) if x[1] and str(x[1]).isdigit() else x[1]))]
 
             with open(save_path, 'w', newline='') as f:
-                fieldnames = [
-                    'tree_ids', 'trunk_id',
+                fieldnames = [ 'tree_height_m',
+                    'tree_ids', 'trunk_id', 'branch_id',
                     'section', 'dbh_method', 'dbh_ref_height_m',
                     'location_x_m', 'location_y_m', 'location_z_m', 'location_source',
                     'total_volume_m3', 'dbh_cm',
