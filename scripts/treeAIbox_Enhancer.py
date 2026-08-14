@@ -2078,6 +2078,23 @@ class TreeVisualizerGUI(QMainWindow):
             except Exception:
                 self.current_las_path = None
 
+            # Reset per-tree visualization state from any previously loaded LAS so
+            # stale data (points, masks, color field) does not leak into the new file.
+            self.current_tree_points = None
+            self.current_tree_id = None
+            self.current_mask = None
+            self.all_masks = None
+            self.current_color_values = None
+            self.current_color_field = None
+
+            # Reset the volume folder so it is re-resolved from the NEW LAS path
+            # on the next save/load. Otherwise results keep going to the previous
+            # file's volume folder.
+            self.volume_folder_path = None
+            if hasattr(self, 'volume_folder_label'):
+                self.volume_folder_label.setText("Auto-assigned")
+                self.volume_folder_label.setStyleSheet("color: #4CAF50; font-style: italic;")
+
             # Check for ITC field
             if 'itc' not in self.las_data.point_format.dimension_names:
                 QMessageBox.warning(self, "Warning",
@@ -2949,6 +2966,13 @@ class TreeVisualizerGUI(QMainWindow):
         """Update the coloring of the currently visualized tree."""
         if self.current_tree_points is None or self.current_tree_id is None or not self.plotter or not self.las_data or self.current_mask is None:
             print("Warning: No tree data available for coloring")
+            return
+
+        # Guard against an empty field name. This can happen transiently when
+        # the color combo is cleared/repopulated while loading a new LAS, which
+        # fires currentTextChanged('') while the previous tree is still loaded.
+        if not color_field:
+            print("Warning: Empty color field - skipping recoloring")
             return
 
         # Save current camera state so recoloring preserves zoom & camera position
