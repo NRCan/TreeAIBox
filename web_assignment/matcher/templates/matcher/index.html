@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TreeAIBox - LiDAR to Field Tree Assignment Studio</title>
+    
+    <!-- Google Fonts & Icons -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+    
+    <!-- Leaflet GIS Map CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+    <!-- App Stylesheet -->
+    <link rel="stylesheet" href="/static/matcher/css/style.css?v=20260814j">
+</head>
+<body class="dark-theme">
+    <!-- Main Top Navigation -->
+    <header class="app-header">
+        <div class="header-left">
+            <div>
+                <h1 class="app-title">TreeAIBox <span>Field Matcher</span></h1>
+                <p class="app-subtitle">Semantic & Spatial LiDAR-to-Field Tree Optimization Studio</p>
+            </div>
+        </div>
+        <div class="header-right">
+            <span class="status-badge" id="backendStatus"><i class="fa-solid fa-circle-check"></i> Django Engine Active</span>
+            <a href="https://github.com" target="_blank" class="icon-link"><i class="fa-brands fa-github"></i></a>
+        </div>
+    </header>
+
+    <!-- Main Workspace Container -->
+    <main class="workspace-container">
+        <!-- LEFT SIDEBAR: Controls & Parameters -->
+        <aside class="control-sidebar">
+            <div class="sidebar-scroll">
+                
+                <!-- Section 1: Data Sources -->
+                <div class="panel-card">
+                    <div class="card-header">
+                        <i class="fa-solid fa-folder-tree card-icon"></i>
+                        <h2>1. Input Data Sources</h2>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="gdbPath">Field Survey File (.gdb / .shp):</label>
+                        <div class="input-with-btn">
+                            <input type="text" id="gdbPath" value="{{ default_gdb }}" placeholder="Path to .gdb folder or shapefile...">
+                            <button type="button" class="btn-sm" id="scanLayersBtn" title="Inspect & auto-detect layers">
+                                <i class="fa-solid fa-magnifying-glass"></i> Scan
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="layerSelect">Survey Point Layer:</label>
+                        <select id="layerSelect">
+                            <option value="TreePosition_LiDARGeom_Transect1stemCenter">TreePosition_LiDARGeom_Transect1stemCenter</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="metricsPath">LiDAR Metrics (CSV File or Folder):</label>
+                        <div class="input-with-btn">
+                            <input type="text" id="metricsPath" value="{{ default_metrics }}" placeholder="Path to trunk_metrics.csv or folder...">
+                            <button type="button" class="btn-sm" id="scanCsvsBtn" title="Scan directory for all .csv files">
+                                <i class="fa-solid fa-folder-open"></i> Scan Folder
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Discovered CSV Files Batch Selection Box -->
+                    <div class="csv-batch-box" id="csvBatchBox" style="display: none;">
+                        <div class="csv-batch-header">
+                            <span id="csvBatchCountTitle"><i class="fa-solid fa-file-csv"></i> Discovered CSVs (0)</span>
+                            <div class="csv-batch-actions">
+                                <button type="button" class="btn-link" id="btnSelectAllCsvs">All</button>
+                                <button type="button" class="btn-link" id="btnClearAllCsvs">None</button>
+                            </div>
+                        </div>
+                        <div class="csv-checkbox-list" id="csvCheckboxList">
+                            <!-- Populated dynamically via JS -->
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="outDir">Output Directory:</label>
+                        <input type="text" id="outDir" value="{{ default_out }}" placeholder="Output destination directory...">
+                    </div>
+                </div>
+
+                <!-- Section 2: Exclusion Filters -->
+                <div class="panel-card">
+                    <div class="card-header">
+                        <i class="fa-solid fa-filter card-icon"></i>
+                        <h2>2. Exclusion & Quality Filters</h2>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group col-6">
+                            <label for="minHeightClass">Min Height Class:</label>
+                            <select id="minHeightClass" title="Exclude trees below this class (e.g. 1 excludes class 0 / unknown)">
+                                <option value="1" selected>Class 1 (&ge; 1 / valid)</option>
+                                <option value="2">Class 2 (5-10m+)</option>
+                                <option value="3">Class 3 (10-15m+)</option>
+                                <option value="4">Class 4 (15-20m+)</option>
+                                <option value="0">Class 0 (Allow Unknown)</option>
+                            </select>
+                        </div>
+                        <div class="form-group col-6">
+                            <label for="maxHeightClass">Max Height Class:</label>
+                            <select id="maxHeightClass">
+                                <option value="5" selected>Class 5 (All heights)</option>
+                                <option value="4">Class 4 (&le; 20m)</option>
+                                <option value="3">Class 3 (&le; 15m)</option>
+                                <option value="2">Class 2 (&le; 10m)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group col-6">
+                            <label for="minDbh">Min DBH (cm):</label>
+                            <input type="number" id="minDbh" placeholder="Optional min DBH..." step="0.5">
+                        </div>
+                        <div class="form-group col-6">
+                            <label for="maxDbh">Max DBH (cm):</label>
+                            <input type="number" id="maxDbh" placeholder="Optional max DBH..." step="0.5">
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="speciesFilter">Species Filter (Exact / Substring):</label>
+                        <input type="text" id="speciesFilter" placeholder="e.g. Pine, Oak, BF... (leave empty for all)">
+                    </div>
+                </div>
+
+                <!-- Section 3: Optimization Parameters -->
+                <div class="panel-card">
+                    <div class="card-header">
+                        <i class="fa-solid fa-sliders card-icon"></i>
+                        <h2>3. Match Weights & Constraints</h2>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group col-6">
+                            <label for="tolerance">Search Radius (m):</label>
+                            <input type="number" id="tolerance" value="2.5" step="0.1" min="0.5" max="10.0">
+                        </div>
+                        <div class="form-group col-6">
+                            <label for="dbhScale">DBH Tolerance (cm):</label>
+                            <input type="number" id="dbhScale" value="15.0" step="1.0" min="2.0">
+                        </div>
+                    </div>
+
+                    <div class="slider-group">
+                        <div class="slider-header">
+                            <span>Spatial Proximity Weight:</span>
+                            <span class="weight-pct" id="lblSpatialWeight">50% (0.50)</span>
+                        </div>
+                        <input type="range" id="sliderSpatial" min="0" max="1" step="0.05" value="0.50">
+                    </div>
+
+                    <div class="slider-group">
+                        <div class="slider-header">
+                            <span>DBH Agreement Weight:</span>
+                            <span class="weight-pct" id="lblDbhWeight">25% (0.25)</span>
+                        </div>
+                        <input type="range" id="sliderDbh" min="0" max="1" step="0.05" value="0.25">
+                    </div>
+
+                    <div class="slider-group">
+                        <div class="slider-header">
+                            <span>Height Class Weight:</span>
+                            <span class="weight-pct" id="lblHeightWeight">25% (0.25)</span>
+                        </div>
+                        <input type="range" id="sliderHeight" min="0" max="1" step="0.05" value="0.25">
+                    </div>
+
+                    <div class="form-group" style="margin-top: 12px;">
+                        <label for="solverMethod">Assignment Solver:</label>
+                        <select id="solverMethod">
+                            <option value="optimal" selected>Hungarian Algorithm (Global Optimum - Recommended)</option>
+                            <option value="greedy">Greedy Nearest-First</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Action Button -->
+                <button type="button" class="btn-primary" id="btnRunMatch">
+                    <i class="fa-solid fa-play"></i> Run Optimal Assignment
+                </button>
+
+                <div class="progress-container" id="progressContainer" style="display: none;">
+                    <div class="progress-bar-fill" id="progressBarFill"></div>
+                    <span class="progress-text" id="progressText">Processing tree optimization...</span>
+                </div>
+
+            </div>
+        </aside>
+
+        <!-- RIGHT MAIN AREA: Tabbed Analytics & Map Studio -->
+        <section class="main-studio">
+            
+            <!-- Top Studio Bar with Tabs & Dataset Selector -->
+            <div class="studio-header-bar">
+                <nav class="studio-nav">
+                    <button class="nav-tab active" data-tab="tabMap"><i class="fa-solid fa-map-location-dot"></i> GIS Map Studio</button>
+                    <button class="nav-tab" data-tab="tabTable"><i class="fa-solid fa-table-list"></i> Inventory Table</button>
+                    <button class="nav-tab" data-tab="tabMetrics"><i class="fa-solid fa-chart-pie"></i> Analytics & Matrix</button>
+                    <button class="nav-tab" data-tab="tabReport"><i class="fa-solid fa-file-lines"></i> Detailed Match Log</button>
+                    <button class="nav-tab" data-tab="tabBatch" id="tabBatchBtn" style="display: none;"><i class="fa-solid fa-chart-line"></i> Batch Comparison</button>
+                    <button class="nav-tab" data-tab="tabExecutiveReport" id="tabExecutiveReportBtn"><i class="fa-solid fa-file-invoice"></i> Executive Audit Report</button>
+                </nav>
+
+                <!-- Dataset / Run Selector for Multi-CSV Batch Processing -->
+                <div class="dataset-switcher">
+                    <label for="datasetSelect"><i class="fa-solid fa-database"></i> Viewing:</label>
+                    <select id="datasetSelect">
+                        <option value="single">Single Dataset</option>
+                    </select>
+                    <span class="batch-badge" id="batchBadge" style="display: none;">1 CSV</span>
+                </div>
+            </div>
+
+            <!-- Tab 1: GIS Map -->
+            <div class="tab-pane active" id="tabMap">
+                <div class="map-toolbar">
+                    <div class="toolbar-left">
+                        <span class="toolbar-title"><i class="fa-solid fa-layer-group"></i> Spatial Overlay</span>
+                        <label class="toggle-pill"><input type="checkbox" id="chkShowLines" checked> <span>Connection Lines</span></label>
+                        <label class="toggle-pill"><input type="checkbox" id="chkShowLidar" checked> <span class="cyan-dot"></span> <span>LiDAR Trees</span></label>
+                        <label class="toggle-pill"><input type="checkbox" id="chkShowField" checked> <span class="orange-dot"></span> <span>Field Survey</span></label>
+                    </div>
+                    <div class="toolbar-right">
+                        <button class="btn-tool" id="btnToggleLegend"><i class="fa-solid fa-list"></i> Toggle Legend</button>
+                        <button class="btn-tool" id="btnResetMapZoom" title="Fit to all trees"><i class="fa-solid fa-compress"></i> Fit Extents</button>
+                    </div>
+                </div>
+
+                <div class="map-wrapper-relative">
+                    <div id="gisMap" class="gis-map-canvas"></div>
+
+                    <!-- Floating Symbology Legend -->
+                    <div class="map-floating-legend" id="mapLegend">
+                        <div class="legend-header">
+                            <span><i class="fa-solid fa-circle-info"></i> Line & Symbol Legend</span>
+                            <button type="button" class="btn-close-legend" id="btnCloseLegend">&times;</button>
+                        </div>
+                        <div class="legend-items">
+                            <div class="legend-item">
+                                <span class="line-swatch swatch-green"></span>
+                                <div class="legend-desc">
+                                    <div class="legend-title">Green Connection Line</div>
+                                    <div class="legend-sub"><strong>High Confidence Match (&ge; 0.70)</strong>: Strong spatial proximity (&lt;1.0m) and matching DBH / Height.</div>
+                                </div>
+                            </div>
+                            <div class="legend-item">
+                                <span class="line-swatch swatch-amber"></span>
+                                <div class="legend-desc">
+                                    <div class="legend-title">Orange Connection Line</div>
+                                    <div class="legend-sub"><strong>Moderate Match (0.50 – 0.69)</strong>: Acceptable proximity or minor attribute differences.</div>
+                                </div>
+                            </div>
+                            <div class="legend-item">
+                                <span class="line-swatch swatch-red"></span>
+                                <div class="legend-desc">
+                                    <div class="legend-title">Red / Dashed Connection Line</div>
+                                    <div class="legend-sub"><strong>Marginal Match (&lt; 0.50 / &gt;1.5m)</strong>: Tree pair near the 2.5m tolerance limit.</div>
+                                </div>
+                            </div>
+                            <div class="legend-item">
+                                <span class="point-swatch swatch-cyan-point"></span>
+                                <div class="legend-desc">
+                                    <div class="legend-title">Cyan Circle Point</div>
+                                    <div class="legend-sub"><strong>LiDAR Extracted Tree</strong>: Trunk metrics centroid location.</div>
+                                </div>
+                            </div>
+                            <div class="legend-item">
+                                <span class="point-swatch swatch-orange-point"></span>
+                                <div class="legend-desc">
+                                    <div class="legend-title">Orange Circle Point</div>
+                                    <div class="legend-sub"><strong>Field Survey Tree</strong>: Ground-truth GPS field tagged tree.</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab 2: Inventory Table -->
+            <div class="tab-pane" id="tabTable">
+                <div class="table-action-bar">
+                    <div class="filter-controls">
+                        <label for="tableFilterMode"><i class="fa-solid fa-eye"></i> View:</label>
+                        <select id="tableFilterMode">
+                            <option value="all">All Trees (Matched + Unmatched)</option>
+                            <option value="matched" selected>Matched Pairs Only</option>
+                            <option value="unmatched_lidar">Unmatched LiDAR Only</option>
+                            <option value="unmatched_field">Unmatched Field Only</option>
+                        </select>
+                    </div>
+
+                    <div class="search-box">
+                        <i class="fa-solid fa-magnifying-glass search-icon"></i>
+                        <input type="text" id="tableSearchInput" placeholder="Filter by Tree ID, species, DBH...">
+                    </div>
+
+                    <div class="download-group">
+                        <button class="btn-sm btn-outline" id="btnExportCsv"><i class="fa-solid fa-file-csv"></i> Download CSV</button>
+                    </div>
+                </div>
+
+                <div class="table-wrapper">
+                    <table class="data-table" id="resultsDataTable">
+                        <thead>
+                            <tr>
+                                <th>LiDAR ID</th>
+                                <th>Field ID</th>
+                                <th>Distance (m)</th>
+                                <th>Score</th>
+                                <th>LiDAR DBH (cm)</th>
+                                <th>Field DBH (cm)</th>
+                                <th>DBH Diff (cm)</th>
+                                <th>LiDAR Height Class</th>
+                                <th>Field Height Class</th>
+                                <th>Species</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tableBody">
+                            <tr>
+                                <td colspan="11" class="empty-state">
+                                    <i class="fa-solid fa-inbox empty-icon"></i>
+                                    <p>Run the assignment to inspect matched pairs and unmatched tree records.</p>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Tab 3: Analytics & Confusion Matrix -->
+            <div class="tab-pane" id="tabMetrics">
+                <!-- Top Metric Cards -->
+                <div class="metrics-grid">
+                    <div class="metric-card card-green">
+                        <div class="card-title">FIELD MATCH RATE</div>
+                        <div class="card-value" id="valMatchRate">-- / -- (0%)</div>
+                        <div class="card-sub" id="valMatchRateSub">Field Recovery: --% | LiDAR: --%</div>
+                    </div>
+                    <div class="metric-card card-cyan">
+                        <div class="card-title">MEAN DISTANCE ERROR</div>
+                        <div class="card-value" id="valDistErr">-- m</div>
+                        <div class="card-sub" id="valDistMedian">Median: -- m</div>
+                    </div>
+                    <div class="metric-card card-amber">
+                        <div class="card-title">DBH MAE / RMSE</div>
+                        <div class="card-value" id="valDbhError">-- / -- cm</div>
+                        <div class="card-sub">Absolute Error vs Ground Truth</div>
+                    </div>
+                    <div class="metric-card card-purple">
+                        <div class="card-title">DBH CORRELATION (r)</div>
+                        <div class="card-value" id="valDbhCorr">--</div>
+                        <div class="card-sub">Pearson Linear Correlation</div>
+                    </div>
+                </div>
+
+                <!-- Confusion Matrix -->
+                <div class="matrix-card">
+                    <div class="matrix-header">
+                        <h3><i class="fa-solid fa-chart-simple"></i> Height Class Agreement Matrix (1 to 5)</h3>
+                        <span class="legend-text">Classes: 1 (&lt;5m) | 2 (5-10m) | 3 (10-15m) | 4 (15-20m) | 5 (&gt;20m)</span>
+                    </div>
+                    <div class="matrix-table-container">
+                        <table class="matrix-table" id="confusionMatrixTable">
+                            <thead>
+                                <tr>
+                                    <th>Field \ LiDAR</th>
+                                    <th>LiDAR 1</th>
+                                    <th>LiDAR 2</th>
+                                    <th>LiDAR 3</th>
+                                    <th>LiDAR 4</th>
+                                    <th>LiDAR 5</th>
+                                </tr>
+                            </thead>
+                            <tbody id="matrixBody">
+                                <!-- Populated dynamically -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab 4: Detailed Report Log -->
+            <div class="tab-pane" id="tabReport">
+                <div class="report-toolbar">
+                    <span class="toolbar-title"><i class="fa-solid fa-terminal"></i> Formatted Match Report & Full Breakdown</span>
+                    <button class="btn-sm btn-outline" id="btnCopyReport"><i class="fa-solid fa-copy"></i> Copy Log</button>
+                </div>
+                <div class="report-text-container">
+                    <pre id="reportPreText" class="code-log">No run performed yet. Click "Run Optimal Assignment" to generate the full audit report.</pre>
+                </div>
+            </div>
+
+            <!-- Tab 5: Multi-CSV Batch Comparison -->
+            <div class="tab-pane" id="tabBatch">
+                <div class="report-toolbar">
+                    <span class="toolbar-title"><i class="fa-solid fa-chart-bar"></i> Batch Runs Comparison Matrix</span>
+                    <span class="legend-text" id="batchTotalCountText">0 Datasets Evaluated</span>
+                </div>
+                <div class="table-wrapper" style="padding: 16px;">
+                    <table class="data-table" id="batchSummaryTable">
+                        <thead>
+                            <tr>
+                                <th>LiDAR CSV File</th>
+                                <th>Total LiDAR Trees</th>
+                                <th>Matched Pairs</th>
+                                <th>LiDAR Match %</th>
+                                <th>Field Match %</th>
+                                <th>Mean Dist Error (m)</th>
+                                <th>DBH MAE (cm)</th>
+                                <th>DBH Corr (r)</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="batchTableBody">
+                            <tr>
+                                <td colspan="9" class="empty-state">
+                                    <i class="fa-solid fa-folder-open empty-icon"></i>
+                                    <p>Select multiple CSV files or a folder to compare batch matching statistics.</p>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Tab 6: Executive Audit Report & PDF Document -->
+            <div class="tab-pane" id="tabExecutiveReport">
+                <div class="report-doc-toolbar">
+                    <div class="doc-toolbar-left">
+                        <span class="doc-title-badge"><i class="fa-solid fa-file-pdf"></i> Executive Audit Document</span>
+                        <span class="doc-dataset-tag" id="reportDatasetTag">Dataset: Single Run</span>
+                    </div>
+                    <div class="doc-toolbar-right">
+                        <button type="button" class="btn-doc btn-print-pdf" id="btnPrintPdf">
+                            <i class="fa-solid fa-print"></i> Print / Save as PDF
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Scrollable A4 pages viewer -->
+                <div class="audit-report-scroll-wrapper" id="printableAuditReport">
+
+                    <!-- ══════════════════════════════════════════════ PAGE 1 ══ -->
+                    <!-- ══════════════════════════════════════════════ PAGE 1 ══ -->
+                    <div class="a4-page" id="reportPage1">
+                        <!-- Page Header -->
+                        <div class="a4-page-header">
+                            <div class="a4-brand">
+                                <div>
+                                    <div class="a4-brand-title">TreeAIBox</div>
+                                    <div class="a4-brand-sub">LiDAR to Field Tree Assignment Studio</div>
+                                </div>
+                            </div>
+                            <div class="a4-page-num">Page 1 / 4</div>
+                        </div>
+
+                        <!-- Cover title block -->
+                        <div class="a4-cover-block">
+                            <h1 class="a4-report-title">LiDAR to Field Tree Assignment<br><span class="a4-title-accent">Executive Audit Report</span></h1>
+                            <p class="a4-report-subtitle">Automated Semantic &amp; Spatial Ground-Truth Verification</p>
+                            <div class="a4-cover-rule"></div>
+                            <div class="a4-meta-grid">
+                                <div class="a4-meta-item"><span class="a4-meta-key">Date Generated</span><span class="a4-meta-val" id="docGeneratedDate">--</span></div>
+                                <div class="a4-meta-item"><span class="a4-meta-key">Processing Engine</span><span class="a4-meta-val">TreeAIBox Hungarian Matcher</span></div>
+                                <div class="a4-meta-item"><span class="a4-meta-key">Active Dataset</span><span class="a4-meta-val highlight-text" id="docActiveDatasetName">--</span></div>
+                                <div class="a4-meta-item"><span class="a4-meta-key">Audit Status</span><span class="a4-meta-val"><span class="badge-success">VERIFIED RUN</span></span></div>
+                            </div>
+                        </div>
+
+                        <!-- Section 1: KPI Metrics -->
+                        <div class="a4-section">
+                            <div class="a4-section-title">1. Executive Inventory &amp; Matching KPIs</div>
+                            <div class="doc-kpi-grid">
+                                <div class="doc-kpi-box box-green">
+                                    <div class="kpi-label">FIELD MATCH RATE (RECOVERY)</div>
+                                    <div class="kpi-value" id="docFieldMatchRate">--%</div>
+                                    <div class="kpi-sub" id="docFieldMatchCounts">-- / -- Surveyed Trees</div>
+                                </div>
+                                <div class="doc-kpi-box box-cyan">
+                                    <div class="kpi-label">LIDAR PRECISION RATE</div>
+                                    <div class="kpi-value" id="docLidarMatchRate">--%</div>
+                                    <div class="kpi-sub" id="docLidarMatchCounts">-- / -- LiDAR Trees</div>
+                                </div>
+                                <div class="doc-kpi-box box-amber">
+                                    <div class="kpi-label">MEAN SPATIAL DISTANCE ERROR</div>
+                                    <div class="kpi-value" id="docMeanDist">-- m</div>
+                                    <div class="kpi-sub" id="docMedianDist">Median: -- m</div>
+                                </div>
+                                <div class="doc-kpi-box box-purple">
+                                    <div class="kpi-label">DBH ACCURACY (MAE / RMSE)</div>
+                                    <div class="kpi-value" id="docDbhErrors">-- / -- cm</div>
+                                    <div class="kpi-sub" id="docDbhCorr">Pearson r: --</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Section 2: Parameter Audit -->
+                        <div class="a4-section">
+                            <div class="a4-section-title">2. Configuration &amp; Parameter Audit Trail</div>
+                            <table class="doc-table-params">
+                                <tbody>
+                                    <tr>
+                                        <th>Field Survey Source File:</th>
+                                        <td id="docParamGdb" colspan="3">--</td>
+                                    </tr>
+                                    <tr>
+                                        <th>Survey Point Layer:</th>
+                                        <td id="docParamLayer">--</td>
+                                        <th>Optimization Solver:</th>
+                                        <td id="docParamSolver">Hungarian (Global Optimal)</td>
+                                    </tr>
+                                    <tr>
+                                        <th>LiDAR Metrics Input:</th>
+                                        <td id="docParamLiDAR" colspan="3">--</td>
+                                    </tr>
+                                    <tr>
+                                        <th>Search Tolerance / Radius:</th>
+                                        <td id="docParamTol">-- m</td>
+                                        <th>DBH Error Scale (&sigma;):</th>
+                                        <td id="docParamDbhScale">-- cm</td>
+                                    </tr>
+                                    <tr>
+                                        <th>Optimization Weights:</th>
+                                        <td id="docParamWeights" colspan="3">Spatial: 50% | DBH: 25% | Height: 25%</td>
+                                    </tr>
+                                    <tr>
+                                        <th>Exclusion &amp; Quality Filters:</th>
+                                        <td id="docParamFilters" colspan="3">Height Class: 1 to 5 | Min DBH: None | Max DBH: None | Species: All</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <!-- Page 1 Footer -->
+                        <div class="a4-page-footer">
+                            <span>TreeAIBox Environmental LiDAR Analytics &bull; Confidential Survey Audit</span>
+                            <span>Page 1 of 4</span>
+                        </div>
+                    </div><!-- /Page 1 -->
+
+                    <!-- ══════════════════════════════════════════════ PAGE 2 ══ -->
+                    <div class="a4-page" id="reportPage2">
+                        <div class="a4-page-header">
+                            <div class="a4-brand">
+                                <div>
+                                    <div class="a4-brand-title">TreeAIBox</div>
+                                    <div class="a4-brand-sub">LiDAR to Field Tree Assignment Studio</div>
+                                </div>
+                            </div>
+                            <div class="a4-page-num">Page 2 / 4</div>
+                        </div>
+
+                        <!-- Section 3: Spatial Map -->
+                        <div class="a4-section a4-section-map">
+                            <div class="a4-section-title">3. Spatial Matching Map Overview</div>
+                            <div class="doc-map-container">
+                                <div id="docReportLiveMap" class="doc-report-map-canvas"></div>
+                            </div>
+                            <div class="doc-legend-row">
+                                <span><strong style="color: #22c55e;">▬▬</strong> High Match (&ge;0.70)</span>
+                                <span><strong style="color: #f59e0b;">▬▬</strong> Moderate Match (0.50-0.69)</span>
+                                <span><strong style="color: #ef4444;">▬▬</strong> Low Match (&lt;0.50)</span>
+                                <span><strong style="color: #06b6d4;">●</strong> LiDAR Trees</span>
+                                <span><strong style="color: #f97316;">●</strong> Field Survey Trees</span>
+                            </div>
+                        </div>
+
+                        <!-- Section 4: Height Class Matrix -->
+                        <div class="a4-section">
+                            <div class="a4-section-title">4. Height Class Agreement Matrix (1 to 5)</div>
+                            <div class="doc-matrix-wrapper">
+                                <table class="matrix-table doc-matrix-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Field \ LiDAR</th>
+                                            <th>Class 1 (&lt;5m)</th>
+                                            <th>Class 2 (5-10m)</th>
+                                            <th>Class 3 (10-15m)</th>
+                                            <th>Class 4 (15-20m)</th>
+                                            <th>Class 5 (&gt;20m)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="docMatrixBody">
+                                        <!-- Dynamic rows -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Page 2 Footer -->
+                        <div class="a4-page-footer">
+                            <span>TreeAIBox Environmental LiDAR Analytics &bull; Confidential Survey Audit</span>
+                            <span>Page 2 of 4</span>
+                        </div>
+                    </div><!-- /Page 2 -->
+
+                    <!-- ══════════════════════════════════════════════ PAGE 3 ══ -->
+                    <div class="a4-page" id="reportPage3">
+                        <div class="a4-page-header">
+                            <div class="a4-brand">
+                                <div>
+                                    <div class="a4-brand-title">TreeAIBox</div>
+                                    <div class="a4-brand-sub">LiDAR to Field Tree Assignment Studio</div>
+                                </div>
+                            </div>
+                            <div class="a4-page-num">Page 3 / 4</div>
+                        </div>
+
+                        <!-- Section 5: Matched Pairs Table -->
+                        <div class="a4-section" style="flex: 1;">
+                            <div class="a4-section-title">5. Detailed Matched Pairs Breakdown</div>
+                            <div class="doc-table-wrapper">
+                                <table class="data-table doc-inventory-table">
+                                    <thead>
+                                        <tr>
+                                            <th style="width: 10%;">LiDAR ID</th>
+                                            <th style="width: 10%;">Field ID</th>
+                                            <th style="width: 10%;">Distance (m)</th>
+                                            <th style="width: 9%;">Score</th>
+                                            <th style="width: 10%;">LiDAR DBH</th>
+                                            <th style="width: 10%;">Field DBH</th>
+                                            <th style="width: 9%;">&Delta; DBH</th>
+                                            <th style="width: 10%;">LiDAR Ht</th>
+                                            <th style="width: 10%;">Field Ht</th>
+                                            <th style="width: 12%;">Species</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="docInventoryTableBody">
+                                        <tr><td colspan="10" class="empty-state">Run assignment to view matched trees breakdown.</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Page 3 Footer -->
+                        <div class="a4-page-footer">
+                            <span>TreeAIBox Environmental LiDAR Analytics &bull; Confidential Survey Audit</span>
+                            <span>Page 3 of 4</span>
+                        </div>
+                    </div><!-- /Page 3 -->
+
+                    <!-- ══════════════════════════════════════════════ PAGE 4 ══ -->
+                    <div class="a4-page" id="reportPage4">
+                        <div class="a4-page-header">
+                            <div class="a4-brand">
+                                <div>
+                                    <div class="a4-brand-title">TreeAIBox</div>
+                                    <div class="a4-brand-sub">LiDAR to Field Tree Assignment Studio</div>
+                                </div>
+                            </div>
+                            <div class="a4-page-num">Page 4 / 4</div>
+                        </div>
+
+                        <!-- Section 6: Batch Comparison (batch mode only) -->
+                        <div class="a4-section" id="docBatchSection" style="display:none;">
+                            <div class="a4-section-title">6. Batch Multi-Dataset Evaluation Comparison</div>
+                            <div class="doc-table-wrapper">
+                                <table class="data-table doc-batch-table">
+                                    <thead>
+                                        <tr>
+                                            <th style="width: 32%; text-align: left;">LiDAR Dataset</th>
+                                            <th style="width: 8%;">LiDAR Trees</th>
+                                            <th style="width: 8%;">Matched</th>
+                                            <th style="width: 12%;">Field Recovery %</th>
+                                            <th style="width: 12%;">LiDAR Precision %</th>
+                                            <th style="width: 10%;">Mean Dist (m)</th>
+                                            <th style="width: 9%;">DBH MAE (cm)</th>
+                                            <th style="width: 9%;">DBH Corr (r)</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="docBatchTableBody">
+                                        <!-- Populated if batch -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Section 7: Audit Log -->
+                        <div class="a4-section" style="flex: 1;">
+                            <div class="a4-section-title">7. Raw Solver Audit Log &amp; Execution Summary</div>
+                            <div class="doc-log-box">
+                                <pre id="docRawLogText" class="doc-code-log">No run performed yet.</pre>
+                            </div>
+                        </div>
+
+                        <!-- Page 4 Footer -->
+                        <div class="a4-page-footer">
+                            <span>TreeAIBox Environmental LiDAR Analytics &bull; Confidential Survey Audit</span>
+                            <span>Page 4 of 4 &nbsp;&bull;&nbsp; Generated by TreeAIBox v2.0</span>
+                        </div>
+                    </div><!-- /Page 4 -->
+
+                </div><!-- /scroll wrapper -->
+            </div><!-- /tabExecutiveReport -->
+
+        </section>
+    </main>
+
+    <!-- Leaflet & html2canvas & JS Scripts -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="/static/matcher/js/app.js?v=20260814j"></script>
+</body>
+</html>
