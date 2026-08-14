@@ -2262,23 +2262,6 @@ class TreeVisualizerGUI(QMainWindow):
             except Exception:
                 self.current_las_path = None
 
-            # Ensure file is registered in self.las_layers
-            norm_path = os.path.normpath(file_path)
-            if not any(os.path.normpath(l['path']) == norm_path for l in self.las_layers):
-                has_stemcls_check = 'stemcls' in self.las_data.point_format.dimension_names
-                num_trees_check = 0
-                if 'itc' in self.las_data.point_format.dimension_names:
-                    itc_v = np.array(self.las_data['itc'])
-                    num_trees_check = len(np.unique(itc_v[itc_v > 0]))
-                self.las_layers.append({
-                    'path': norm_path,
-                    'name': os.path.basename(file_path),
-                    'num_points': num_points,
-                    'num_trees': num_trees_check,
-                    'has_stemcls': has_stemcls_check,
-                    'checked': True
-                })
-
             # Check for ITC field
             if 'itc' not in self.las_data.point_format.dimension_names:
                 if not silent:
@@ -3150,6 +3133,13 @@ class TreeVisualizerGUI(QMainWindow):
         """Update the coloring of the currently visualized tree."""
         if self.current_tree_points is None or self.current_tree_id is None or not self.plotter or not self.las_data or self.current_mask is None:
             print("Warning: No tree data available for coloring")
+            return
+
+        # Guard against an empty field name. This can happen transiently when
+        # the color combo is cleared/repopulated while loading a new LAS, which
+        # fires currentTextChanged('') while the previous tree is still loaded.
+        if not color_field:
+            print("Warning: Empty color field - skipping recoloring")
             return
 
         # Save current camera state so recoloring preserves zoom & camera position
