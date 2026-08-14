@@ -867,6 +867,9 @@ class TreeVisualizerGUI(QMainWindow):
         print(f"[INIT] {time.strftime('%H:%M:%S')} - super().__init__ done ({time.perf_counter() - init_start:.3f}s)")
         
         self.las_data = None
+        self.current_las_path = None
+        self.las_layers = []  # List of layer dicts: {'path', 'name', 'num_points', 'num_trees', 'has_stemcls', 'checked'}
+        self._updating_las_layer_list = False
         self.unique_itc_values = []
         self.current_tree_points = None
         self.current_tree_id = None
@@ -1368,9 +1371,60 @@ class TreeVisualizerGUI(QMainWindow):
         self.file_label.setStyleSheet("color: #bbbbbb;")
         file_layout.addWidget(self.file_label)
 
-        self.load_button = ModernButton("Load LAS File")
+        self.load_button = ModernButton("Add LAS File(s)")
+        self.load_button.setToolTip("Add single or multiple LAS/LAZ files to layer manager")
         self.load_button.clicked.connect(self.load_las_file)
         file_layout.addWidget(self.load_button)
+
+        # ── LAS Layer Manager Widget ──
+        self.las_layer_group = QGroupBox("LAS Layer Manager")
+        las_layer_vbox = QVBoxLayout(self.las_layer_group)
+        las_layer_vbox.setSpacing(6)
+        las_layer_vbox.setContentsMargins(8, 10, 8, 8)
+
+        las_btn_grid = QGridLayout()
+        las_btn_grid.setSpacing(4)
+
+        self.remove_las_btn = ModernButton("Remove")
+        self.remove_las_btn.setToolTip("Remove selected LAS file from layer manager")
+        self.remove_las_btn.setFixedHeight(26)
+        self.remove_las_btn.setStyleSheet("QPushButton { font-size: 10px; padding: 2px 4px; }")
+        self.remove_las_btn.clicked.connect(self.remove_selected_las_layer)
+        las_btn_grid.addWidget(self.remove_las_btn, 0, 0)
+
+        self.toggle_las_batch_btn = ModernButton("Check All")
+        self.toggle_las_batch_btn.setToolTip("Toggle checking all LAS files for batch processing")
+        self.toggle_las_batch_btn.setFixedHeight(26)
+        self.toggle_las_batch_btn.setStyleSheet("QPushButton { font-size: 10px; padding: 2px 4px; }")
+        self.toggle_las_batch_btn.clicked.connect(self.toggle_las_batch_checks)
+        las_btn_grid.addWidget(self.toggle_las_batch_btn, 0, 1)
+
+        las_layer_vbox.addLayout(las_btn_grid)
+
+        self.las_layer_list = QListWidget()
+        self.las_layer_list.setMaximumHeight(140)
+        self.las_layer_list.setToolTip("Loaded LAS layers. Check items to include in multi-LAS batch processing.\nClick an item to switch active viewer.")
+        self.las_layer_list.setStyleSheet("""
+            QListWidget {
+                background-color: #2b2b2b;
+                color: #e0e0e0;
+                border: 1px solid #444444;
+                border-radius: 4px;
+                font-size: 11px;
+            }
+            QListWidget::item {
+                padding: 4px;
+            }
+            QListWidget::item:selected {
+                background-color: #1976D2;
+                color: white;
+            }
+        """)
+        self.las_layer_list.itemClicked.connect(self._on_las_layer_clicked)
+        self.las_layer_list.itemChanged.connect(self._on_las_layer_check_changed)
+        las_layer_vbox.addWidget(self.las_layer_list)
+
+        file_layout.addWidget(self.las_layer_group)
 
         self.import_gdb_button = ModernButton("Import Points from GDB")
         self.import_gdb_button.clicked.connect(self.import_points_from_gdb)
@@ -2041,16 +2095,146 @@ class TreeVisualizerGUI(QMainWindow):
         return scroll_area
 
     def load_las_file(self):
-        """Open file dialog and load LAS file."""
-        file_dialog = QFileDialog()
-        file_dialog.setNameFilter("LAS files (*.las *.laz)")
-        file_dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+        """Open file dialog to add single or multiple LAS/LAZ files to the Layer Manager."""
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Select LAS File(s)",
+            "",
+            "LAS files (*.las *.laz)"
+        )
+        if not file_paths:
+            return
 
-        if file_dialog.exec():
-            file_path = file_dialog.selectedFiles()[0]
-            self.load_las_data(file_path)
+        added_paths = []
+        for path in file_paths:
+            rec = self._add_las_to_layers(path)
+            if rec:
+                added_paths.append(path)
 
-    def load_las_data(self, file_path):
+        if added_paths:
+            # Activate the last added layer
+            self.activate_las_layer(added_paths[-1])
+
+    def _add_las_to_layers(self, file_path):
+        """Register a LAS file in self.las_layers if not already present."""
+        norm_path = os.path.normpath(file_path)
+        for layer in self.las_layers:
+            if os.path.normpath(layer['path']) == norm_path:
+                return layer  # Already present
+
+        try:
+            import laspy
+            data = laspy.read(file_path)
+            num_points = len(data.points)
+            has_stemcls = 'stemcls' in data.point_format.dimension_names
+            num_trees = 0
+            if 'itc' in data.point_format.dimension_names:
+                itc_vals = np.array(data['itc'])
+                num_trees = len(np.unique(itc_vals[itc_vals > 0]))
+
+            layer_rec = {
+                'path': norm_path,
+                'name': os.path.basename(file_path),
+                'num_points': num_points,
+                'num_trees': num_trees,
+                'has_stemcls': has_stemcls,
+                'checked': True
+            }
+            self.las_layers.append(layer_rec)
+            self._update_las_layer_list_widget()
+            return layer_rec
+        except Exception as e:
+            self.log_to_console(f"⚠️ Could not inspect metadata for {os.path.basename(file_path)}: {e}")
+            return None
+
+    def _update_las_layer_list_widget(self):
+        """Re-populate the LAS layer list widget."""
+        self._updating_las_layer_list = True
+        self.las_layer_list.clear()
+
+        for layer in self.las_layers:
+            name = layer['name']
+            pts = layer['num_points']
+            trees = layer['num_trees']
+            display_text = f"{name} ({trees} trees, {pts:,} pts)"
+
+            item = QListWidgetItem(display_text)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if layer.get('checked', True) else Qt.CheckState.Unchecked)
+            item.setData(Qt.ItemDataRole.UserRole, layer['path'])
+
+            # Bold font if this layer is currently active
+            if self.current_las_path and os.path.normpath(self.current_las_path) == os.path.normpath(layer['path']):
+                font = item.font()
+                font.setBold(True)
+                item.setFont(font)
+
+            self.las_layer_list.addItem(item)
+
+        self._updating_las_layer_list = False
+
+    def _on_las_layer_clicked(self, item):
+        """Handle user clicking a layer item to switch active viewer."""
+        path = item.data(Qt.ItemDataRole.UserRole)
+        if path and (not self.current_las_path or os.path.normpath(path) != os.path.normpath(self.current_las_path)):
+            self.activate_las_layer(path)
+
+    def _on_las_layer_check_changed(self, item):
+        """Handle user toggling a layer checkbox."""
+        if getattr(self, '_updating_las_layer_list', False):
+            return
+        path = item.data(Qt.ItemDataRole.UserRole)
+        is_checked = (item.checkState() == Qt.CheckState.Checked)
+        for layer in self.las_layers:
+            if os.path.normpath(layer['path']) == os.path.normpath(path):
+                layer['checked'] = is_checked
+                break
+
+    def remove_selected_las_layer(self):
+        """Remove the selected layer from self.las_layers."""
+        current_item = self.las_layer_list.currentItem()
+        if not current_item:
+            return
+        path = current_item.data(Qt.ItemDataRole.UserRole)
+        self.las_layers = [l for l in self.las_layers if os.path.normpath(l['path']) != os.path.normpath(path)]
+        self._update_las_layer_list_widget()
+        if self.current_las_path and os.path.normpath(self.current_las_path) == os.path.normpath(path):
+            if self.las_layers:
+                self.activate_las_layer(self.las_layers[0]['path'])
+            else:
+                self.las_data = None
+                self.current_las_path = None
+                self.file_label.setText("No file loaded")
+                self.tree_list.clear()
+
+    def toggle_las_batch_checks(self):
+        """Toggle check state of all LAS layers."""
+        if not self.las_layers:
+            return
+        all_checked = all(l.get('checked', True) for l in self.las_layers)
+        new_state = not all_checked
+        for l in self.las_layers:
+            l['checked'] = new_state
+        self._update_las_layer_list_widget()
+        if hasattr(self, 'toggle_las_batch_btn'):
+            self.toggle_las_batch_btn.setText("Uncheck All" if new_state else "Check All")
+
+    def activate_las_layer(self, file_path, silent=False):
+        """Switch active LAS file, load data into memory, and update UI."""
+        norm_path = os.path.normpath(file_path)
+        # Ensure file is in layers list
+        found = False
+        for l in self.las_layers:
+            if os.path.normpath(l['path']) == norm_path:
+                found = True
+                break
+        if not found:
+            self._add_las_to_layers(file_path)
+
+        self.load_las_data(file_path, silent=silent)
+        self._update_las_layer_list_widget()
+
+    def load_las_data(self, file_path, silent=False):
         """Load LAS file and extract ITC values."""
         import time
         load_start = time.perf_counter()
@@ -2074,14 +2258,32 @@ class TreeVisualizerGUI(QMainWindow):
             self.file_label.setText(f"Loaded: {os.path.basename(file_path)}")
             # Remember the current LAS file path for automatic saves
             try:
-                self.current_las_path = file_path
+                self.current_las_path = os.path.normpath(file_path)
             except Exception:
                 self.current_las_path = None
 
+            # Ensure file is registered in self.las_layers
+            norm_path = os.path.normpath(file_path)
+            if not any(os.path.normpath(l['path']) == norm_path for l in self.las_layers):
+                has_stemcls_check = 'stemcls' in self.las_data.point_format.dimension_names
+                num_trees_check = 0
+                if 'itc' in self.las_data.point_format.dimension_names:
+                    itc_v = np.array(self.las_data['itc'])
+                    num_trees_check = len(np.unique(itc_v[itc_v > 0]))
+                self.las_layers.append({
+                    'path': norm_path,
+                    'name': os.path.basename(file_path),
+                    'num_points': num_points,
+                    'num_trees': num_trees_check,
+                    'has_stemcls': has_stemcls_check,
+                    'checked': True
+                })
+
             # Check for ITC field
             if 'itc' not in self.las_data.point_format.dimension_names:
-                QMessageBox.warning(self, "Warning",
-                                  "No 'itc' scalar field found in the LAS file.")
+                if not silent:
+                    QMessageBox.warning(self, "Warning",
+                                      "No 'itc' scalar field found in the LAS file.")
                 self.las_data = None
                 return
 
@@ -2101,7 +2303,7 @@ class TreeVisualizerGUI(QMainWindow):
             perform_stemcls_filter = False
             if has_stemcls:
                 LARGE_FILE_THRESHOLD = 50_000_000  # 50 million points
-                if num_points > LARGE_FILE_THRESHOLD:
+                if num_points > LARGE_FILE_THRESHOLD and not silent:
                     reply = QMessageBox.question(
                         self,
                         "Large File Detected",
@@ -2136,9 +2338,6 @@ class TreeVisualizerGUI(QMainWindow):
             elif has_stemcls and not perform_stemcls_filter:
                 print(f"[LOAD] {time.strftime('%H:%M:%S')} - Skipped stemcls filtering (user choice)")
                 self.log_to_console(f"⚡ Skipped stem filtering - showing all {len(self.unique_itc_values)} trees")
-
-            # Defer centroid pre-computation until first neighbor search to avoid slow loading
-            # self.precompute_tree_centroids()  # Called lazily when needed
 
             # Populate tree list widget
             list_start = time.perf_counter()
@@ -2184,11 +2383,13 @@ class TreeVisualizerGUI(QMainWindow):
             print(f"[LOAD] {time.strftime('%H:%M:%S')} - Load complete: {total_time:.2f}s total")
             self.log_to_console(f"✅ Loaded {len(self.unique_itc_values)} trees from {num_points:,} points in {total_time:.2f}s")
             
-            QMessageBox.information(self, "Success",
-                                  f"Loaded {len(self.unique_itc_values)} unique tree IDs from {len(self.las_data.points)} points.")
+            if not silent:
+                QMessageBox.information(self, "Success",
+                                      f"Loaded {len(self.unique_itc_values)} unique tree IDs from {len(self.las_data.points)} points.")
 
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to load LAS file:\n{str(e)}")
+            if not silent:
+                QMessageBox.critical(self, "Error", f"Failed to load LAS file:\n{str(e)}")
             self.las_data = None
         finally:
             self.progress_bar.setVisible(False)
@@ -5007,17 +5208,21 @@ class TreeVisualizerGUI(QMainWindow):
 
     def batch_analyze_trunk_volumes(self):
         """
-        Automated batch processing: iterate through all tree IDs with trunk points,
-        visualize trunk → select all points → calculate volume for each.
-        Save folder is requested once at the beginning and reused for all saves.
+        Automated batch processing across all checked LAS files in the Layer Manager.
+        For each checked LAS file, iterates through all tree IDs with trunk points,
+        visualizes trunk, detects trunk/branches, calculates volume, and exports metrics.
         """
-        if self.las_data is None:
-            QMessageBox.warning(self, "Warning", "No LAS file loaded.")
-            return
+        # Determine target LAS files from layer manager (or active file fallback)
+        checked_layers = [l for l in self.las_layers if l.get('checked', True)]
+        if not checked_layers and self.current_las_path:
+            norm_c = os.path.normpath(self.current_las_path)
+            checked_layers = [{
+                'path': norm_c,
+                'name': os.path.basename(norm_c)
+            }]
 
-        # Check if stemcls field exists
-        if 'stemcls' not in self.las_data.point_format.dimension_names:
-            QMessageBox.warning(self, "Warning", "No 'stemcls' scalar field found in the LAS file.")
+        if not checked_layers:
+            QMessageBox.warning(self, "Warning", "No LAS files checked or loaded for batch analysis.")
             return
 
         try:
@@ -5025,9 +5230,9 @@ class TreeVisualizerGUI(QMainWindow):
 
             batch_start_perf = time.perf_counter()
             batch_start_dt = datetime.now()
-            self.log_to_console(f"⏱️ Batch analysis started at {batch_start_dt.strftime('%Y-%m-%d %H:%M:%S')}")
+            self.log_to_console(f"⏱️ Multi-LAS Batch analysis started for {len(checked_layers)} file(s) at {batch_start_dt.strftime('%Y-%m-%d %H:%M:%S')}")
 
-            # --- Ask user for batch configuration dialogs (apply once at start) ---
+            # --- Ask user for batch configuration dialogs (apply once for the entire batch run) ---
             skip_dialog = BatchSkipOptionsDialog(self, default_threshold=50)
             if skip_dialog.exec() != QDialog.Accepted:
                 self.log_to_console("ℹ️ Batch cancelled by user (skip options)")
@@ -5035,14 +5240,11 @@ class TreeVisualizerGUI(QMainWindow):
             skip_opts = skip_dialog.get_options()
             self.log_to_console(f"🔧 Batch skip options: {skip_opts}")
 
-            # Pre-fill the batch trunk dialog defaults with the current
-            # main-window DBH reference height so the field shows the existing value.
             _batch_trunk_defaults = dict(getattr(self, 'trunk_detection_params', {}))
             _batch_trunk_defaults['dbh_reference_height'] = float(getattr(self, 'dbh_reference_height', 1.3))
             trunk_dialog = BatchTrunkParamsDialog(self, defaults=_batch_trunk_defaults)
             if trunk_dialog.exec() == QDialog.Accepted:
                 new_trunk_params = trunk_dialog.get_params()
-                # Update UI widgets so detection uses these params
                 try:
                     self.trunk_slice_height_input.setValue(int(new_trunk_params.get('slice_height_cm', 25)))
                     self.trunk_base_zone_input.setValue(float(new_trunk_params.get('base_zone_height_m', 0.0)))
@@ -5052,10 +5254,6 @@ class TreeVisualizerGUI(QMainWindow):
                     self.trunk_min_points_input.setValue(int(new_trunk_params.get('min_trunk_points', 120)))
                     self.trunk_min_span_input.setValue(float(new_trunk_params.get('min_vertical_span_m', 1.0)))
                     self.trunk_full_assign_input.setValue(float(new_trunk_params.get('full_height_assign_dist_m', 0.45)))
-                    # Apply the DBH reference height from the dialog so batch
-                    # uses what the user entered even if they forgot to set it
-                    # in the main window. Setting the spinbox also syncs
-                    # self.dbh_reference_height via its valueChanged handler.
                     _batch_dbh_h = new_trunk_params.get('dbh_reference_height')
                     if _batch_dbh_h is not None:
                         if hasattr(self, 'dbh_height_input'):
@@ -5065,7 +5263,6 @@ class TreeVisualizerGUI(QMainWindow):
                         self.log_to_console(
                             f"📏 Batch DBH reference height set to: {float(_batch_dbh_h):.2f}m"
                         )
-                    # Also update internal dict
                     self.trunk_detection_params.update(new_trunk_params)
                     self.log_to_console("🔧 Trunk detection parameters updated for batch run")
                 except Exception:
@@ -5094,155 +5291,146 @@ class TreeVisualizerGUI(QMainWindow):
                 self.log_to_console("ℹ️ Batch cancelled by user (branch parameters)")
                 return
 
-            # Step 2: Get all tree IDs in sorted order (first to last)
-            all_forest_ids = sorted(self.unique_itc_values.tolist())
-            self.log_to_console(f"📋 Found {len(all_forest_ids)} tree IDs in list")
+            total_trees_processed = 0
+            total_trees_found = 0
+            all_skipped_trees = []
+            exported_csv_files = []
 
-            # Step 3: Filter to only trees that have trunk points (stemcls != 1)
-            itc_values = np.array(self.las_data['itc'])
-            stemcls_values = np.array(self.las_data['stemcls'])
-            
-            valid_tree_ids = []
-            for tree_id in all_forest_ids:
-                mask = (itc_values == tree_id) & (stemcls_values != 1)
-                if np.any(mask):
-                    valid_tree_ids.append(tree_id)
+            for file_idx, layer in enumerate(checked_layers, 1):
+                file_path = layer['path']
+                file_name = layer['name']
 
-            self.log_to_console(f"🌳 Trees with trunk points: {len(valid_tree_ids)} / {len(all_forest_ids)}")
+                self.log_to_console(f"\n{'='*60}")
+                self.log_to_console(f"🚀 [File {file_idx}/{len(checked_layers)}] Starting batch analysis for: {file_name}")
+                self.log_to_console(f"{'='*60}")
 
-            if not valid_tree_ids:
-                QMessageBox.warning(self, "Warning", "No trees with trunk points found in the list.")
-                return
-
-            # Step 4: Prepare for batch run
-            self.accumulated_volume_sections = []
-            self.log_to_console("🔄 Cleared previous volume results.")
-
-            # Use the same default volume folder as the manual save/load path so
-            # batch output lands where the Load Data button already looks.
-            if self.volume_folder_path and os.path.exists(self.volume_folder_path):
-                folder = self.volume_folder_path
-            else:
-                base_dir = None
-                las_basename = None
+                # Load/activate the LAS file
                 try:
-                    if getattr(self, 'current_las_path', None):
-                        base_dir = os.path.dirname(self.current_las_path)
-                        las_basename = os.path.splitext(os.path.basename(self.current_las_path))[0]
-                except Exception:
-                    base_dir = None
-                    las_basename = None
+                    self.activate_las_layer(file_path, silent=True)
+                except Exception as load_err:
+                    self.log_to_console(f"❌ Failed to load file {file_name}: {load_err}")
+                    continue
 
-                if not base_dir:
-                    base_dir = os.getcwd()
-                    las_basename = "volume_data"
+                if self.las_data is None or 'stemcls' not in self.las_data.point_format.dimension_names:
+                    self.log_to_console(f"⚠️ Skipping file {file_name}: no valid LAS data or 'stemcls' field missing.")
+                    continue
 
-                folder = os.path.join(base_dir, 'volume', las_basename)
+                all_forest_ids = sorted(self.unique_itc_values.tolist())
+                itc_values = np.array(self.las_data['itc'])
+                stemcls_values = np.array(self.las_data['stemcls'])
+                
+                valid_tree_ids = []
+                for tree_id in all_forest_ids:
+                    mask = (itc_values == tree_id) & (stemcls_values != 1)
+                    if np.any(mask):
+                        valid_tree_ids.append(tree_id)
 
-            os.makedirs(folder, exist_ok=True)
-            self.volume_folder_path = folder
-            if hasattr(self, 'volume_folder_label'):
-                self.volume_folder_label.setText(f"Volume Folder: {os.path.basename(folder)}")
-            self.log_to_console(f"📁 Batch volume folder set to: {folder}")
+                self.log_to_console(f"🌳 [{file_name}] Trees with trunk points: {len(valid_tree_ids)} / {len(all_forest_ids)}")
+                total_trees_found += len(valid_tree_ids)
 
-            processed_count = 0
-            skipped_trees = []
+                if not valid_tree_ids:
+                    self.log_to_console(f"ℹ️ [{file_name}] No trees with trunk points found.")
+                    continue
 
-            # Loop through each valid tree and process using new workflow
-            for idx, tree_id in enumerate(valid_tree_ids, 1):
-                self.log_to_console(f"\n\n📍 Processing tree {idx}/{len(valid_tree_ids)}: ID={tree_id}")
+                self.accumulated_volume_sections = []
+                folder = os.path.join(os.path.dirname(file_path), 'volume', os.path.splitext(file_name)[0])
+                os.makedirs(folder, exist_ok=True)
+                self.volume_folder_path = folder
+                if hasattr(self, 'volume_folder_label'):
+                    self.volume_folder_label.setText(f"Volume Folder: {os.path.basename(folder)}")
 
-                try:
-                    # Visualize tree trunks for this ID
-                    self._visualize_trunk_single_tree(tree_id)
-                    QApplication.processEvents()
+                file_processed_count = 0
+                skipped_trees = []
 
-                    # Detect trunks in base zone
+                for idx, tree_id in enumerate(valid_tree_ids, 1):
+                    self.log_to_console(f"\n📍 [{file_name} | {idx}/{len(valid_tree_ids)}] Processing tree ID={tree_id}")
+
                     try:
-                        self.detect_trunks_in_slices()
+                        self._visualize_trunk_single_tree(tree_id)
                         QApplication.processEvents()
-                    except Exception as dt_e:
-                        self.log_to_console(f"⚠️ Trunk detection failed for tree {tree_id}: {dt_e}")
 
-                    # Evaluate trunk detection results
-                    num_trunks = 0
-                    if hasattr(self, 'trunk_assignment') and self.trunk_assignment is not None:
-                        unique_trunks = np.unique(self.trunk_assignment)
-                        unique_trunks = unique_trunks[unique_trunks >= 0]
-                        num_trunks = len(unique_trunks)
+                        try:
+                            self.detect_trunks_in_slices()
+                            QApplication.processEvents()
+                        except Exception as dt_e:
+                            self.log_to_console(f"⚠️ Trunk detection failed for tree {tree_id}: {dt_e}")
 
-                    if num_trunks == 0 and skip_opts.get('skip_no_trunk', True):
-                        self.log_to_console(f"⏭️ Skipping tree {tree_id}: no trunks detected")
-                        skipped_trees.append((tree_id, 'no_trunks'))
-                        continue
+                        num_trunks = 0
+                        if hasattr(self, 'trunk_assignment') and self.trunk_assignment is not None:
+                            unique_trunks = np.unique(self.trunk_assignment)
+                            unique_trunks = unique_trunks[unique_trunks >= 0]
+                            num_trunks = len(unique_trunks)
 
-                    # Optionally skip trees with only very small trunks
-                    if skip_opts.get('skip_small_trunk', True) and num_trunks > 0:
-                        # compute largest trunk point count
-                        trunk_sizes = []
-                        for t in unique_trunks:
-                            cnt = int(np.sum(self.trunk_assignment == t))
-                            trunk_sizes.append(cnt)
-                        max_size = max(trunk_sizes) if trunk_sizes else 0
-                        if max_size < int(skip_opts.get('small_trunk_threshold', 50)):
-                            self.log_to_console(f"⏭️ Skipping tree {tree_id}: largest trunk {max_size} pts < threshold")
-                            skipped_trees.append((tree_id, 'small_trunk'))
+                        if num_trunks == 0 and skip_opts.get('skip_no_trunk', True):
+                            self.log_to_console(f"⏭️ Skipping tree {tree_id}: no trunks detected")
+                            skipped_trees.append((tree_id, 'no_trunks'))
                             continue
 
-                    # Detect branches (if trunks found)
-                    try:
-                        if num_trunks > 0:
-                            self.detect_branch_clusters_in_slices()
-                            QApplication.processEvents()
-                    except Exception as db_e:
-                        self.log_to_console(f"⚠️ Branch detection failed for tree {tree_id}: {db_e}")
+                        if skip_opts.get('skip_small_trunk', True) and num_trunks > 0:
+                            trunk_sizes = [int(np.sum(self.trunk_assignment == t)) for t in unique_trunks]
+                            max_size = max(trunk_sizes) if trunk_sizes else 0
+                            if max_size < int(skip_opts.get('small_trunk_threshold', 50)):
+                                self.log_to_console(f"⏭️ Skipping tree {tree_id}: largest trunk {max_size} pts < threshold")
+                                skipped_trees.append((tree_id, 'small_trunk'))
+                                continue
 
-                    # Select all points and calculate volume for this tree
-                    self._select_all_points_silent()
-                    QApplication.processEvents()
-                    self._calculate_volume_silent()
-                    QApplication.processEvents()
+                        try:
+                            if num_trunks > 0:
+                                self.detect_branch_clusters_in_slices()
+                                QApplication.processEvents()
+                        except Exception as db_e:
+                            self.log_to_console(f"⚠️ Branch detection failed for tree {tree_id}: {db_e}")
 
-                    # Persist the current tree's volume data before clearing it for the next tree.
-                    self._save_volume_data_silent()
-                    QApplication.processEvents()
+                        self._select_all_points_silent()
+                        QApplication.processEvents()
+                        self._calculate_volume_silent()
+                        QApplication.processEvents()
 
-                    # Export this tree's metrics using the existing export feature, then clear for the next tree.
-                    try:
-                        self.export_trunk_metrics()
-                    except Exception as export_e:
-                        self.log_to_console(f"⚠️ Export failed for tree {tree_id}: {export_e}")
-                        raise
+                        self._save_volume_data_silent()
+                        QApplication.processEvents()
 
-                    self.clear_accumulated_volume()
+                        try:
+                            self.export_trunk_metrics()
+                        except Exception as export_e:
+                            self.log_to_console(f"⚠️ Export failed for tree {tree_id}: {export_e}")
+                            raise
 
-                    processed_count += 1
-                    self.log_to_console(f"✅ Successfully processed tree {tree_id}")
+                        self.clear_accumulated_volume()
 
-                except Exception as e:
-                    self.log_to_console(f"⚠️ Skipped tree {tree_id}: {str(e)}")
-                    skipped_trees.append((tree_id, str(e)))
-                finally:
-                    elapsed_seconds = max(time.perf_counter() - batch_start_perf, 1e-9)
-                    elapsed_minutes = elapsed_seconds / 60.0
-                    trees_per_min = idx / elapsed_minutes if elapsed_minutes > 0 else 0.0
-                    elapsed_str = time.strftime("%H:%M:%S", time.gmtime(elapsed_seconds))
-                    self.log_to_console(
-                        f"📈 Status: {idx}/{len(valid_tree_ids)} trees | {trees_per_min:.2f} trees/min | elapsed {elapsed_str}"
-                    )
+                        file_processed_count += 1
+                        total_trees_processed += 1
+                        self.log_to_console(f"✅ [{file_name}] Successfully processed tree {tree_id}")
+
+                    except Exception as e:
+                        self.log_to_console(f"⚠️ [{file_name}] Skipped tree {tree_id}: {str(e)}")
+                        skipped_trees.append((tree_id, str(e)))
+
+                all_skipped_trees.extend([(file_name, tid, reason) for tid, reason in skipped_trees])
+
+                # Save export file path for master merge
+                export_file = os.path.join(os.path.dirname(file_path), 'export', f"{os.path.splitext(file_name)[0]}_trunk_metrics.csv")
+                if os.path.exists(export_file):
+                    exported_csv_files.append(export_file)
+
+            # Master Multi-LAS Export Merger
+            if len(exported_csv_files) > 1:
+                try:
+                    self._create_combined_multi_las_export(exported_csv_files)
+                except Exception as merge_err:
+                    self.log_to_console(f"⚠️ Failed to generate combined multi-LAS export CSV: {merge_err}")
 
             # Final summary
             batch_end_dt = datetime.now()
             elapsed_seconds = max(time.perf_counter() - batch_start_perf, 1e-9)
             elapsed_str = time.strftime("%H:%M:%S", time.gmtime(elapsed_seconds))
             self.log_to_console(
-                f"⏱️ Batch analysis ended at {batch_end_dt.strftime('%Y-%m-%d %H:%M:%S')} | duration {elapsed_str}"
+                f"\n🎉 Multi-LAS Batch analysis completed! Total files: {len(checked_layers)} | Total trees processed: {total_trees_processed} | Duration: {elapsed_str}"
             )
 
             self._display_batch_completion_summary(
-                processed_count,
-                len(valid_tree_ids),
-                skipped_trees,
+                total_trees_processed,
+                total_trees_found,
+                [(tid, reason) for _, tid, reason in all_skipped_trees],
                 batch_start_dt,
                 batch_end_dt,
                 elapsed_seconds,
@@ -5251,6 +5439,38 @@ class TreeVisualizerGUI(QMainWindow):
         except Exception as e:
             self.log_to_console(f"❌ Batch analysis error: {str(e)}")
             QMessageBox.critical(self, "Error", f"Batch analysis failed: {str(e)}")
+
+    def _create_combined_multi_las_export(self, csv_files):
+        """Combine metrics from multiple LAS export CSV files into a master CSV."""
+        import csv
+        combined_rows = []
+        fieldnames = None
+
+        for csv_path in csv_files:
+            if not os.path.exists(csv_path):
+                continue
+            with open(csv_path, 'r', newline='') as f:
+                reader = csv.DictReader(f)
+                if fieldnames is None:
+                    raw_fields = list(reader.fieldnames or [])
+                    if 'las_file' not in raw_fields:
+                        fieldnames = ['las_file'] + raw_fields
+                    else:
+                        fieldnames = raw_fields
+                
+                las_name = os.path.basename(csv_path).replace('_trunk_metrics.csv', '')
+                for row in reader:
+                    row['las_file'] = las_name
+                    combined_rows.append(row)
+
+        if combined_rows and fieldnames:
+            first_file_dir = os.path.dirname(csv_files[0])
+            master_csv = os.path.join(first_file_dir, "combined_multi_las_trunk_metrics.csv")
+            with open(master_csv, 'w', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(combined_rows)
+            self.log_to_console(f"📊 Generated combined multi-LAS export: {master_csv}")
 
 
     def _visualize_trunk_single_tree(self, tree_id):
@@ -5294,9 +5514,19 @@ class TreeVisualizerGUI(QMainWindow):
             self.current_color_values = None
             self.current_color_field = "Default (green)"
 
-            # Store tree height (from ground to top) for export.
-            self.current_tree_height = float(np.max(points[:, 2]) - np.min(points[:, 2]))
-            self.current_tree_ground_z = float(np.min(points[:, 2]))
+            # Compute full tree height (using all points for this tree ID, including canopy) for export.
+            full_mask = (itc_values == tree_id)
+            if self.filter_checkbox.isChecked() and 'treefilter' in self.las_data.point_format.dimension_names:
+                treefilter_values = np.array(self.las_data['treefilter'])
+                full_mask = full_mask & (treefilter_values == 2)
+
+            if np.any(full_mask):
+                full_zs = np.array(self.las_data.z)[full_mask]
+                self.current_tree_height = float(np.max(full_zs) - np.min(full_zs))
+                self.current_tree_ground_z = float(np.min(full_zs))
+            else:
+                self.current_tree_height = float(np.max(points[:, 2]) - np.min(points[:, 2]))
+                self.current_tree_ground_z = float(np.min(points[:, 2]))
 
             # Visualize with green color
             self.plotter.add_points(points, color='green', point_size=3, name=f'trunk_tree_{tree_id}')

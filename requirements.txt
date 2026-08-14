@@ -17,6 +17,9 @@ PyQt6>=6.11.0
 PyQt6-WebEngine>=6.11.0
 # PyQt6.QtWebChannel is included with PyQt6, no separate package needed
 
+# Web application framework
+django>=4.2.0
+
 # GUI framework (used by scripts/Processing_WorkFlow/normalize_las_gui.py)
 PySide6>=6.11.0
 
