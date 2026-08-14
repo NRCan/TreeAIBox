@@ -2256,9 +2256,14 @@ class TreeVisualizerGUI(QMainWindow):
             self.log_to_console(f"📊 File read: {num_points:,} points, {file_size_mb:.1f} MB in {read_time:.2f}s")
             
             self.file_label.setText(f"Loaded: {os.path.basename(file_path)}")
-            # Remember the current LAS file path for automatic saves
+            # Remember the current LAS file path for automatic saves and volume data loading
             try:
                 self.current_las_path = os.path.normpath(file_path)
+                base_dir = os.path.dirname(self.current_las_path)
+                las_basename = os.path.splitext(os.path.basename(self.current_las_path))[0]
+                self.volume_folder_path = os.path.join(base_dir, 'volume', las_basename)
+                if hasattr(self, 'volume_folder_label'):
+                    self.volume_folder_label.setText(f"Volume Folder: {os.path.basename(self.volume_folder_path)}")
             except Exception:
                 self.current_las_path = None
 
@@ -10065,27 +10070,24 @@ Important:
             self._set_progress(2, "Resolving volume folder")
             self._profile_volume_load('start')
 
-            # Reuse the remembered folder when available; otherwise resolve it from the current LAS path.
+            # Resolve the volume folder corresponding to the currently active LAS file first.
             folder = None
-            if hasattr(self, 'volume_folder_path') and isinstance(self.volume_folder_path, str) and self.volume_folder_path and os.path.exists(self.volume_folder_path):
+            if getattr(self, 'current_las_path', None):
+                base_dir = os.path.dirname(self.current_las_path)
+                las_basename = os.path.splitext(os.path.basename(self.current_las_path))[0]
+                expected_folder = os.path.join(base_dir, 'volume', las_basename)
+                if os.path.exists(expected_folder):
+                    folder = expected_folder
+                elif hasattr(self, 'volume_folder_path') and isinstance(self.volume_folder_path, str) and self.volume_folder_path and os.path.exists(self.volume_folder_path):
+                    folder = self.volume_folder_path
+                else:
+                    folder = expected_folder
+                self.log_to_console(f"📂 Resolved volume folder for active LAS: {folder}")
+            elif hasattr(self, 'volume_folder_path') and isinstance(self.volume_folder_path, str) and self.volume_folder_path and os.path.exists(self.volume_folder_path):
                 folder = self.volume_folder_path
                 self.log_to_console(f"📂 Using configured volume folder: {folder}")
             else:
-                base_dir = None
-                las_basename = None
-                try:
-                    if getattr(self, 'current_las_path', None):
-                        base_dir = os.path.dirname(self.current_las_path)
-                        las_basename = os.path.splitext(os.path.basename(self.current_las_path))[0]
-                except Exception:
-                    base_dir = None
-                    las_basename = None
-
-                if not base_dir:
-                    base_dir = os.getcwd()
-                    las_basename = "volume_data"
-
-                folder = os.path.join(base_dir, 'volume', las_basename)
+                folder = os.path.join(os.getcwd(), 'volume', 'volume_data')
                 self.log_to_console(f"📂 Auto-resolved volume folder: {folder}")
 
             try:

@@ -146,9 +146,65 @@ def scan_csvs(request):
 
         return JsonResponse({
             'status': 'ok',
-            'scanned_dir': str(target_dir).replace('\\', '/'),
-            'files': found_files,
-            'count': len(found_files)
+            'target_dir': str(target_dir).replace('\\', '/'),
+            'files': found_files
+        })
+
+    except Exception as e:
+        return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+
+@csrf_exempt
+def pick_path(request):
+    """API to trigger native desktop OS file/folder picker dialog."""
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'POST required'}, status=405)
+
+    try:
+        data = json.loads(request.body) if request.body else {}
+        target_type = data.get('type', 'file')  # 'gdb', 'metrics', 'folder', 'file'
+        initial_dir = data.get('initial_dir', '').strip()
+
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes('-topmost', True)
+
+        selected_path = ""
+        init_path = initial_dir if (initial_dir and os.path.exists(initial_dir)) else None
+
+        if target_type == 'gdb':
+            # GDB directory or vector file (.shp / .gpkg)
+            selected_path = filedialog.askdirectory(title="Select Field Survey .gdb Directory", initialdir=init_path)
+            if not selected_path:
+                selected_path = filedialog.askopenfilename(
+                    title="Or Select Field Survey File (.shp, .gpkg, .gdb)",
+                    filetypes=[("Vector / GDB Files", "*.gdb *.shp *.gpkg *.geojson"), ("All Files", "*.*")],
+                    initialdir=init_path
+                )
+        elif target_type == 'folder':
+            selected_path = filedialog.askdirectory(title="Select Output Directory", initialdir=init_path)
+        elif target_type == 'metrics':
+            selected_path = filedialog.askopenfilename(
+                title="Select LiDAR Metrics CSV File",
+                filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")],
+                initialdir=init_path
+            )
+            if not selected_path:
+                selected_path = filedialog.askdirectory(title="Or Select Folder Containing Metrics CSVs", initialdir=init_path)
+        else:
+            selected_path = filedialog.askopenfilename(title="Select File", initialdir=init_path)
+
+        root.destroy()
+
+        if selected_path:
+            selected_path = os.path.normpath(selected_path).replace("\\", "/")
+
+        return JsonResponse({
+            'status': 'ok',
+            'path': selected_path
         })
 
     except Exception as e:

@@ -1,6 +1,6 @@
 /**
- * TreeAIBox Field Assignment Web Studio
- * Interactive GIS & Optimization Engine
+ * TreeToolBox Field Assignment Web Studio
+ * JavaScript Application Controller
  */
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -190,10 +190,88 @@ function initMap() {
     }
 }
 
+// Auto-update Output Directory based on Input Path
+function updateOutputDirFromInput(inputPath) {
+    if (!inputPath) return;
+    const outDirInput = document.getElementById('outDir');
+    if (!outDirInput) return;
+
+    const cleanPath = inputPath.replace(/\\/g, '/').replace(/\/+$/, '');
+    let baseFolder = '';
+
+    if (cleanPath.toLowerCase().endsWith('.gdb') || /\.[a-zA-Z0-9]+$/.test(cleanPath)) {
+        baseFolder = cleanPath.substring(0, cleanPath.lastIndexOf('/'));
+    } else {
+        baseFolder = cleanPath;
+    }
+
+    if (!baseFolder) baseFolder = cleanPath;
+
+    if (baseFolder) {
+        outDirInput.value = `${baseFolder}/field_assignment_out`;
+    }
+}
+
+// Native Desktop File / Folder Picker API
+async function pickPath(targetType) {
+    let initialDir = '';
+    if (targetType === 'gdb') {
+        initialDir = document.getElementById('gdbPath')?.value.trim() || '';
+    } else if (targetType === 'metrics') {
+        initialDir = document.getElementById('metricsPath')?.value.trim() || '';
+    } else if (targetType === 'folder') {
+        initialDir = document.getElementById('outDir')?.value.trim() || '';
+    }
+
+    try {
+        const res = await fetch('/api/pick-path/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: targetType, initial_dir: initialDir })
+        });
+        const data = await res.json();
+        if (data.status === 'ok' && data.path) {
+            const pickedPath = data.path;
+            if (targetType === 'gdb') {
+                const el = document.getElementById('gdbPath');
+                if (el) el.value = pickedPath;
+                scanLayers(pickedPath);
+                const mPath = document.getElementById('metricsPath')?.value.trim();
+                if (!mPath) updateOutputDirFromInput(pickedPath);
+            } else if (targetType === 'metrics') {
+                const el = document.getElementById('metricsPath');
+                if (el) el.value = pickedPath;
+                scanCsvs(pickedPath);
+                updateOutputDirFromInput(pickedPath);
+            } else if (targetType === 'folder') {
+                const el = document.getElementById('outDir');
+                if (el) el.value = pickedPath;
+            }
+        }
+    } catch (err) {
+        console.error('Error picking path:', err);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Event Listeners
 // ---------------------------------------------------------------------------
 function bindEvents() {
+    const pickGdbBtn = document.getElementById('pickGdbBtn');
+    if (pickGdbBtn) {
+        pickGdbBtn.addEventListener('click', () => pickPath('gdb'));
+    }
+
+    const pickMetricsBtn = document.getElementById('pickMetricsBtn');
+    if (pickMetricsBtn) {
+        pickMetricsBtn.addEventListener('click', () => pickPath('metrics'));
+    }
+
+    const pickOutDirBtn = document.getElementById('pickOutDirBtn');
+    if (pickOutDirBtn) {
+        pickOutDirBtn.addEventListener('click', () => pickPath('folder'));
+    }
+
     const scanLayersBtn = document.getElementById('scanLayersBtn');
     if (scanLayersBtn) {
         scanLayersBtn.addEventListener('click', () => {
@@ -207,6 +285,24 @@ function bindEvents() {
         scanCsvsBtn.addEventListener('click', () => {
             const path = document.getElementById('metricsPath')?.value.trim();
             if (path) scanCsvs(path);
+        });
+    }
+
+    // Auto-update output dir when typing or changing input paths
+    const metricsPathInput = document.getElementById('metricsPath');
+    if (metricsPathInput) {
+        metricsPathInput.addEventListener('input', (e) => {
+            updateOutputDirFromInput(e.target.value.trim());
+        });
+    }
+
+    const gdbPathInput = document.getElementById('gdbPath');
+    if (gdbPathInput) {
+        gdbPathInput.addEventListener('input', (e) => {
+            const mPath = document.getElementById('metricsPath')?.value.trim();
+            if (!mPath) {
+                updateOutputDirFromInput(e.target.value.trim());
+            }
         });
     }
 
@@ -285,9 +381,14 @@ function bindEvents() {
         });
     }
 
-    const btnPrintPdf = document.getElementById('btnPrintPdf');
-    if (btnPrintPdf) {
-        btnPrintPdf.addEventListener('click', printExecutiveReport);
+    const btnPrintDoc = document.getElementById('btnPrintDoc');
+    if (btnPrintDoc) {
+        btnPrintDoc.addEventListener('click', printExecutiveReport);
+    }
+
+    const btnSavePdf = document.getElementById('btnSavePdf');
+    if (btnSavePdf) {
+        btnSavePdf.addEventListener('click', saveExecutiveReportPdf);
     }
 }
 
@@ -943,11 +1044,18 @@ function generateExecutiveReport() {
     if (m) {
         for (let r = 0; r < 5; r++) {
             const tr = document.createElement('tr');
-            let rowHtml = `<th style="text-align: left; background-color: #1e293b; color: #38bdf8; font-weight: 700; border: 1px solid #334155;">Field Class ${r + 1}</th>`;
+            let rowHtml = `<th class="doc-matrix-header-cell">Field Class ${r + 1}</th>`;
             for (let c = 0; c < 5; c++) {
                 const val = m[r][c];
                 const isDiag = (r === c && val > 0);
-                rowHtml += `<td style="border: 1px solid #334155; ${isDiag ? 'background-color: rgba(16, 185, 129, 0.25); font-weight: 800; color: #34d399;' : 'background-color: #0b0f19; color: #f8fafc;'}">${val}</td>`;
+                const isMismatch = (r !== c && val > 0);
+                
+                let cellClass = 'doc-matrix-cell';
+                if (isDiag) cellClass += ' doc-matrix-match';
+                else if (isMismatch) cellClass += ' doc-matrix-mismatch';
+                else cellClass += ' doc-matrix-zero';
+
+                rowHtml += `<td class="${cellClass}">${val}</td>`;
             }
             tr.innerHTML = rowHtml;
             matrixBody.appendChild(tr);
@@ -988,7 +1096,7 @@ function generateExecutiveReport() {
         currentResults.batch_summary.forEach(b => {
             const tr = document.createElement('tr');
             tr.innerHTML = `
-                <td class="doc-cell-filename" style="font-weight: 700; color: #0284c7; word-break: break-all; overflow-wrap: anywhere; text-align: left;">${b.filename}</td>
+                <td class="doc-cell-filename" style="font-weight: 700; color: #0284c7; font-size: 9.5px; line-height: 1.35; padding: 6px 8px; word-break: break-word; overflow-wrap: anywhere; text-align: left;">${b.filename}</td>
                 <td>${b.total_lidar}</td>
                 <td style="font-weight: 700; color: #16a34a;">${b.matched_count}</td>
                 <td>${b.field_match_rate}%</td>
@@ -1003,8 +1111,13 @@ function generateExecutiveReport() {
         batchSec.style.display = 'none';
     }
 
-    // Section 7: Audit Log
-    document.getElementById('docRawLogText').textContent = ds.report_text || 'Report unavailable.';
+    // Section 7: Audit Log — render each line as its own div so PDF never splits mid-line
+    const logEl = document.getElementById('docRawLogText');
+    const logText = ds.report_text || 'Report unavailable.';
+    const logLines = logText.split('\n');
+    logEl.innerHTML = logLines.map(line =>
+        `<div style="break-inside:avoid;page-break-inside:avoid;white-space:pre-wrap;word-break:break-all;overflow-wrap:anywhere;min-height:1em;">${line.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') || ' '}</div>`
+    ).join('');
 }
 
 // ---------------------------------------------------------------------------
@@ -1015,8 +1128,10 @@ function ensureReportMap(geojson) {
     const container = document.getElementById('docReportLiveMap');
     if (!container || !geojson || !geojson.features) return;
 
-    const W = container.clientWidth || container.offsetWidth || 680;
-    const H = container.clientHeight || container.offsetHeight || 220;
+    // Use fixed standard A4 content dimensions (700 x 350) matching container height
+    // so SVG viewport spans 100% of container width and height without any whitespace gaps
+    const W = 700;
+    const H = 350;
 
     // Collect all coordinates to compute geographic bounding box
     const lons = [], lats = [];
@@ -1036,7 +1151,7 @@ function ensureReportMap(geojson) {
     const minLon = Math.min(...lons), maxLon = Math.max(...lons);
     const minLat = Math.min(...lats), maxLat = Math.max(...lats);
 
-    const PAD = 42;
+    const PAD = 25;
     const avgLat = (minLat + maxLat) / 2;
     const cosLat = Math.cos(avgLat * Math.PI / 180);
     const xMeters = Math.max((maxLon - minLon) * 111320 * cosLat, 1);
@@ -1054,14 +1169,13 @@ function ensureReportMap(geojson) {
 
     const NS = 'http://www.w3.org/2000/svg';
     let svgParts = [
-        `<svg xmlns="${NS}" width="100%" height="100%" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" style="display:block;background:#0b1120;border-radius:4px;">`,
+        `<svg xmlns="${NS}" width="700" height="350" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" style="display:block;width:100%;height:350px;background:#f8fafc;">`,
         `<defs>
             <pattern id="rg" x="0" y="0" width="28" height="28" patternUnits="userSpaceOnUse">
-                <path d="M 28 0 L 0 0 0 28" fill="none" stroke="#1e293b" stroke-width="0.5"/>
+                <path d="M 28 0 L 0 0 0 28" fill="none" stroke="#e2e8f0" stroke-width="0.5"/>
             </pattern>
         </defs>`,
-        `<rect width="${W}" height="${H}" fill="url(#rg)"/>`,
-        `<rect x="1" y="1" width="${W-2}" height="${H-2}" fill="none" stroke="#334155" stroke-width="1" rx="4"/>`
+        `<rect width="${W}" height="${H}" fill="url(#rg)"/>`
     ];
 
     // 1. Draw Field Boundary Polygon (behind)
@@ -1071,7 +1185,7 @@ function ensureReportMap(geojson) {
         const pts = ring.map(c => { const pr = project(c[0], c[1]); return `${pr.x},${pr.y}`; }).join(' ');
         const p = f.properties;
         svgParts.push(
-            `<polygon points="${pts}" fill="#fef08a" fill-opacity="0.08" stroke="#facc15" stroke-width="1.8" stroke-dasharray="6 3">
+            `<polygon points="${pts}" fill="#fef08a" fill-opacity="0.1" stroke="#eab308" stroke-width="1" stroke-dasharray="4 2">
                 <title>Field Survey Boundary | ${p.lidar_raw || 0} raw LiDAR → ${p.lidar_after_clip || 0} in boundary</title>
             </polygon>`
         );
@@ -1085,9 +1199,9 @@ function ensureReportMap(geojson) {
         const [c0, c1] = f.geometry.coordinates;
         const a = project(c0[0], c0[1]);
         const b = project(c1[0], c1[1]);
-        const dashArray = p.distance_m > 1.5 ? 'stroke-dasharray="4 3"' : '';
+        const dashArray = p.distance_m > 1.5 ? 'stroke-dasharray="3 2"' : '';
         svgParts.push(
-            `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="${color}" stroke-width="2.2" stroke-opacity="0.9" ${dashArray}>
+            `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="${color}" stroke-width="1.1" stroke-opacity="0.9" ${dashArray}>
                 <title>Match: LiDAR #${p.lidar_id} ↔ Field #${p.field_id} | ${p.distance_m}m | Score: ${p.score}</title>
             </line>`
         );
@@ -1099,7 +1213,7 @@ function ensureReportMap(geojson) {
         const p = f.properties;
         const { x, y } = project(f.geometry.coordinates[0], f.geometry.coordinates[1]);
         svgParts.push(
-            `<circle cx="${x}" cy="${y}" r="4.5" fill="#38bdf8" stroke="#ffffff" stroke-width="1.2" fill-opacity="0.95">
+            `<circle cx="${x}" cy="${y}" r="2.2" fill="#0284c7" stroke="#ffffff" stroke-width="0.6" fill-opacity="0.95">
                 <title>LiDAR #${p.tree_id}: ${p.height_m || '?'}m, ${p.dbh_cm || '?'}cm DBH, Class ${p.height_class}</title>
             </circle>`
         );
@@ -1111,7 +1225,7 @@ function ensureReportMap(geojson) {
         const p = f.properties;
         const { x, y } = project(f.geometry.coordinates[0], f.geometry.coordinates[1]);
         svgParts.push(
-            `<circle cx="${x}" cy="${y}" r="4.5" fill="#fb923c" stroke="#ffffff" stroke-width="1.2" fill-opacity="0.95">
+            `<circle cx="${x}" cy="${y}" r="2.2" fill="#ea580c" stroke="#ffffff" stroke-width="0.6" fill-opacity="0.95">
                 <title>Field #${p.field_id}: ${p.species || 'Tree'}, Class ${p.height_class}, ${p.dbh_cm || '?'}cm DBH</title>
             </circle>`
         );
@@ -1122,12 +1236,12 @@ function ensureReportMap(geojson) {
     const barPx = Math.max(Math.round(barMeters * scale), 20);
     svgParts.push(
         `<g transform="translate(${W - barPx - 20}, ${H - 18})">
-            <line x1="0" y1="0" x2="${barPx}" y2="0" stroke="#94a3b8" stroke-width="2"/>
-            <line x1="0" y1="-3" x2="0" y2="3" stroke="#94a3b8" stroke-width="1.5"/>
-            <line x1="${barPx}" y1="-3" x2="${barPx}" y2="3" stroke="#94a3b8" stroke-width="1.5"/>
-            <text x="${barPx/2}" y="-4" text-anchor="middle" fill="#94a3b8" font-size="8.5" font-family="monospace">${barMeters}m</text>
+            <line x1="0" y1="0" x2="${barPx}" y2="0" stroke="#000000" stroke-width="2"/>
+            <line x1="0" y1="-3" x2="0" y2="3" stroke="#000000" stroke-width="1.5"/>
+            <line x1="${barPx}" y1="-3" x2="${barPx}" y2="3" stroke="#000000" stroke-width="1.5"/>
+            <text x="${barPx/2}" y="-4" text-anchor="middle" fill="#000000" font-size="8.5" font-family="monospace" font-weight="700">${barMeters}m</text>
         </g>`,
-        `<text x="${W - barPx - 34}" y="${H - 14}" fill="#94a3b8" font-size="9" font-family="monospace" text-anchor="middle">N↑</text>`
+        `<text x="${W - barPx - 34}" y="${H - 14}" fill="#000000" font-size="9" font-family="monospace" text-anchor="middle" font-weight="700">N↑</text>`
     );
 
     svgParts.push('</svg>');
@@ -1135,8 +1249,19 @@ function ensureReportMap(geojson) {
 }
 
 // ---------------------------------------------------------------------------
-// Print & PDF Export Trigger
+// Print & PDF Export Triggers
 // ---------------------------------------------------------------------------
+function getActiveReportFilename() {
+    let ds = currentResults;
+    const select = document.getElementById('datasetSelect');
+    const selectedId = select ? select.value : 'single';
+    if (selectedId !== '__batch__' && currentResults && currentResults.datasets && currentResults.datasets[selectedId]) {
+        ds = currentResults.datasets[selectedId];
+    }
+    const rawName = (ds && ds.filename) || document.getElementById('docActiveDatasetName')?.textContent?.trim() || 'TreeToolBox_Report';
+    return rawName.replace(/\.[^/.]+$/, "");
+}
+
 async function printExecutiveReport() {
     generateExecutiveReport();
     
@@ -1150,8 +1275,62 @@ async function printExecutiveReport() {
         ensureReportMap(ds.geojson);
     }
 
-    // Short timeout to let layout and tiles settle
+    const cleanName = getActiveReportFilename();
+    const origTitle = document.title;
+    document.title = `${cleanName}_Executive_Report`;
+
     setTimeout(() => {
         window.print();
+        setTimeout(() => { document.title = origTitle; }, 1000);
     }, 250);
+}
+
+async function saveExecutiveReportPdf() {
+    generateExecutiveReport();
+
+    let ds = currentResults;
+    const select = document.getElementById('datasetSelect');
+    const selectedId = select ? select.value : 'single';
+    if (selectedId !== '__batch__' && currentResults && currentResults.datasets && currentResults.datasets[selectedId]) {
+        ds = currentResults.datasets[selectedId];
+    }
+    if (ds && ds.geojson) {
+        ensureReportMap(ds.geojson);
+    }
+
+    const cleanName = getActiveReportFilename();
+    const pdfFilename = `${cleanName}_Executive_Report.pdf`;
+    const wrapper = document.getElementById('printableAuditReport');
+
+    if (wrapper) {
+        wrapper.classList.add('is-exporting-pdf');
+    }
+
+    if (typeof html2pdf !== 'undefined' && wrapper) {
+        const opt = {
+            margin: 0,
+            filename: pdfFilename,
+            image: { type: 'jpeg', quality: 0.98 },
+            html2canvas: { scale: 2, useCORS: true, logging: false, backgroundColor: '#ffffff' },
+            jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+            pagebreak: { mode: 'css' }
+        };
+        
+        try {
+            await html2pdf().set(opt).from(wrapper).save();
+        } catch (err) {
+            console.error('PDF export error:', err);
+        } finally {
+            if (wrapper) wrapper.classList.remove('is-exporting-pdf');
+        }
+    } else {
+        // Fallback if offline/CDN unavailable: trigger print with pre-filled title
+        const origTitle = document.title;
+        document.title = `${cleanName}_Executive_Report`;
+        window.print();
+        setTimeout(() => {
+            if (wrapper) wrapper.classList.remove('is-exporting-pdf');
+            document.title = origTitle;
+        }, 1000);
+    }
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Launcher script for TreeAIBox Field Assignment Web Studio (Django)
+Launcher script for TreeToolBox Field Assignment Web Studio (Django)
 ==================================================================
 
 Starts the local Django web application and opens it in your default web browser.
@@ -26,7 +26,7 @@ def main():
 
     url = f"http://127.0.0.1:{port}"
     print(f"\n=======================================================")
-    print(f"  Starting TreeAIBox Field Assignment Web Studio")
+    print(f"  Starting TreeToolBox Field Assignment Web Studio")
     print(f"  URL: {url}")
     print(f"=======================================================\n")
 
