@@ -581,12 +581,12 @@ async function runAssignment() {
         if (result.is_batch && result.datasets) {
             renderBatchComparison(result.batch_summary);
             const firstId = result.active_id || Object.keys(result.datasets)[0];
-            switchActiveDataset(firstId);
+            switchActiveDataset(firstId, Boolean(lastBounds));
         } else {
             document.getElementById('tabBatchBtn').style.display = 'none';
             document.getElementById('batchBadge').style.display = 'none';
             renderDashboard(result);
-            renderMapFeatures(result.geojson);
+            renderMapFeatures(result.geojson, Boolean(lastBounds));
             renderTable(result.table_rows);
             renderConfusionMatrix(result.confusion_matrix);
             renderReport(result.report_text);
@@ -651,7 +651,7 @@ function setupDatasetSwitcher(result) {
 // ---------------------------------------------------------------------------
 // Switch Active Dataset in Web UI
 // ---------------------------------------------------------------------------
-function switchActiveDataset(datasetId) {
+function switchActiveDataset(datasetId, preserveView = false) {
     if (!currentResults) return;
 
     if (datasetId === '__batch__') {
@@ -672,7 +672,7 @@ function switchActiveDataset(datasetId) {
     }
 
     renderDashboard(ds);
-    renderMapFeatures(ds.geojson);
+    renderMapFeatures(ds.geojson, preserveView);
     renderTable(ds.table_rows);
     renderConfusionMatrix(ds.confusion_matrix);
     renderReport(ds.report_text);
@@ -756,8 +756,12 @@ function renderDashboard(data) {
 // ---------------------------------------------------------------------------
 // Render GeoJSON Map Features
 // ---------------------------------------------------------------------------
-function renderMapFeatures(geojson) {
+function renderMapFeatures(geojson, preserveView = false) {
     if (!geojson || !map) return;
+
+    // Capture current view before clearing layers if user requested preservation
+    const currentCenter = preserveView ? map.getCenter() : null;
+    const currentZoom = preserveView ? map.getZoom() : null;
 
     layerGroupLines.clearLayers();
     layerGroupLidar.clearLayers();
@@ -905,7 +909,12 @@ function renderMapFeatures(geojson) {
 
     if (bounds.length > 0) {
         lastBounds = bounds;
-        map.fitBounds(L.latLngBounds(bounds), { padding: [40, 40] });
+        if (preserveView && currentCenter && currentZoom) {
+            // Keep user's exact zoom and center position without resetting
+            map.setView(currentCenter, currentZoom, { animate: false });
+        } else {
+            map.fitBounds(L.latLngBounds(bounds), { padding: [40, 40] });
+        }
     }
 }
 
