@@ -239,6 +239,32 @@ def read_field_points(gdb_path, layer=None, height_class_field='hightlevel',
 
     source_crs = gdf.crs
 
+    # ------------------------------------------------------------------
+    # CRS normalization: the matching/geometry engine works in projected
+    # METERS (consistent with the LiDAR trunk_metrics, which are UTM).
+    # If the field layer is in a geographic CRS (lat/lon degrees), e.g. a
+    # field_etl .gpkg exported to EPSG:4326, reproject its points to a
+    # projected UTM CRS so distances/tolerance are meaningful in metres.
+    # ------------------------------------------------------------------
+    projected_xy = None
+    working_crs = source_crs
+    if source_crs is not None:
+        try:
+            from pyproj import CRS as _PCCRS
+            from pyproj import Transformer as _PTrans
+            _src = _PCCRS.from_user_input(source_crs)
+            if _src.is_geographic:
+                _xs = [geom.x for geom in gdf.geometry if geom is not None and not geom.is_empty]
+                _lon = float(np.mean(_xs)) if _xs else 0.0
+                _zone = int((_lon + 180) / 6) % 60 + 1
+                _lat0 = float(gdf.geometry.iloc[0].y)
+                _epsg = 32600 + _zone if _lat0 >= 0 else 32700 + _zone
+                working_crs = "EPSG:%d" % _epsg
+                _t = _PTrans.from_crs(_src, working_crs, always_xy=True)
+                projected_xy = _t
+        except Exception:
+            projected_xy = None
+
     cols = list(gdf.columns)
     id_col = find_column(cols, tree_id_field, ['tree_id', 'treeid', 'id', 'tag_no', 'tag', 'fid'])
     hc_col = find_column(cols, height_class_field, ['height_class', 'heightclass', 'hight_level', 'ht_class'])
@@ -262,6 +288,8 @@ def read_field_points(gdb_path, layer=None, height_class_field='hightlevel',
         if geom is None or geom.is_empty:
             continue
         xy = np.array([geom.x, geom.y], dtype=float)
+        if projected_xy is not None:
+            xy = np.array(projected_xy.transform(float(xy[0]), float(xy[1])), dtype=float)
 
         def _get_val(col):
             if col and col in gdf.columns:
@@ -314,15 +342,77 @@ def read_field_points(gdb_path, layer=None, height_class_field='hightlevel',
             'species': f_sp,
             'crown_class': _get_val(cr_col),
             'health': _get_val(hl_col),
-            'crs': str(source_crs) if source_crs else None,
+            'crs': str(working_crs) if working_crs else None,
             'raw': row.to_dict() if hasattr(row, 'to_dict') else dict(row),
         })
     return field_trees
 
 
 # ---------------------------------------------------------------------------
-# Similarity & Scoring Functions (Shared Attributes Only)
+# Field-boundary filter (convex hull + buffer), mirrors Step-1 boundary_polygon
 # ---------------------------------------------------------------------------
+def build_field_boundary(field_trees, buffer_m=5.0):
+    """Build a buffered convex-hull boundary from the field survey points.
+
+    Field points are already in projected METRES (read_field_points guarantees
+    this via CRS normalization). A convex hull is taken and expanded outward by
+    ``buffer_m`` metres (true perpendicular buffer via shapely), producing a
+    generous survey-area polygon used to filter out LiDAR detections that lie
+    outside the measured plot.
+    """
+    pts = np.array([
+        [ft['xy'][0], ft['xy'][1]] for ft in field_trees if ft.get('xy') is not None
+    ])
+    crs = field_trees[0].get('crs') if field_trees else None
+    out = {'polygon': None, 'inside': None, 'buffer_m': buffer_m, 'crs': crs}
+    if len(pts) < 3:
+        return out
+    from scipy.spatial import ConvexHull as _Hull
+    from shapely.geometry import Polygon as _Polygon
+    try:
+        hull = _Hull(pts)
+        ring = pts[hull.vertices]
+        poly = _Polygon(ring).buffer(max(buffer_m, 0.0), cap_style=1, join_style=2)
+        if poly is None or poly.is_empty or poly.area <= 0:
+            return out
+        def _inside(x, y):
+            try:
+                p = _Polygon([[x, y], [x, y], [x, y]]).centroid
+                return bool(poly.contains(p))
+            except Exception:
+                return False
+        out['polygon'] = poly
+        out['inside'] = _inside
+    except Exception:
+        pass
+    return out
+
+
+def clip_lidar_to_boundary(lidar_trees, field_trees, buffer_m=5.0):
+    """Filter LiDAR detections to those inside the field-point boundary.
+
+    Returns (clipped_lidar, boundary_dict). LiDAR trees whose centroid falls
+    outside the buffered field convex hull are dropped so detection/match
+    percentages only reflect trees expected within the surveyed plot.
+    """
+    boundary = build_field_boundary(field_trees, buffer_m=buffer_m)
+    inside = boundary['inside']
+    if inside is None:
+        return lidar_trees, boundary
+    clipped = {}
+    for tid, lt in lidar_trees.items():
+        xy = lt.get('centroid_xy')
+        if xy is None:
+            continue
+        try:
+            if inside(float(xy[0]), float(xy[1])):
+                clipped[tid] = lt
+        except Exception:
+            continue
+    return clipped, boundary
+
+
+
 def compute_similarity_matrices(lidar_trees, field_trees, tolerance_m=2.5,
                                 dbh_scale_cm=12.0, height_scale_m=3.0):
     """Compute normalized [0, 1] similarity matrices for shared attributes.

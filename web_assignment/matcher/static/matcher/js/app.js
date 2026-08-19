@@ -7,7 +7,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initApp();
 });
 
-// App State
+// App State for Multi-Layer Vector Management
 let map = null;
 let reportMap = null;
 let reportLayerGroup = null;
@@ -18,6 +18,15 @@ let layerGroupBoundary = null;  // convex hull field boundary
 let currentResults = null;
 let lastBounds = null;
 let currentPointMarkers = [];   // Array of { marker, type: 'lidar'|'field', props, defaultTooltip }
+
+// Multi-Layer Custom Vector Store
+let customLayers = {}; // layerId -> { id, name, gdbPath, layerGroup, markers, attributes, selectedLabelField, visible, color, featureCount, bounds }
+const LAYER_COLOR_PALETTE = ['#c084fc', '#34d399', '#facc15', '#f43f5e', '#38bdf8', '#818cf8', '#a78bfa', '#fb923c'];
+
+function getNextLayerColor() {
+    const count = Object.keys(customLayers).length;
+    return LAYER_COLOR_PALETTE[count % LAYER_COLOR_PALETTE.length];
+}
 
 function initApp() {
     initTabs();
@@ -34,6 +43,9 @@ function initApp() {
     if (initialCsv) {
         scanCsvs(initialCsv);
     }
+
+    // Live boundary preview on first load (after the map is ready)
+    setTimeout(() => scheduleBoundaryPreview(200), 400);
 }
 
 // ---------------------------------------------------------------------------
@@ -73,6 +85,80 @@ function initTabs() {
 }
 
 // ---------------------------------------------------------------------------
+// Live Boundary Preview (field survey area polygon)
+// ---------------------------------------------------------------------------
+let previewBoundaryTimer = null;
+
+function getBoundaryPayload() {
+    return {
+        gdb_path: document.getElementById('gdbPath')?.value.trim() || '',
+        layer: document.getElementById('layerSelect')?.value.trim() || '',
+        buffer_m: parseFloat(document.getElementById('boundaryBufferSlider')?.value || '5'),
+        min_height_class: document.getElementById('minHeightClass')?.value || '1',
+        max_height_class: document.getElementById('maxHeightClass')?.value || '5',
+        min_dbh: document.getElementById('minDbh')?.value || '',
+        max_dbh: document.getElementById('maxDbh')?.value || '',
+        species_filter: document.getElementById('speciesFilter')?.value.trim() || '',
+    };
+}
+
+function renderBoundaryPreview(geojson) {
+    if (!map || !layerGroupBoundary) return;
+    layerGroupBoundary.clearLayers();
+    if (!geojson || !geojson.features) return;
+    geojson.features.forEach(f => {
+        if (f.properties.type !== 'field_boundary') return;
+        const ringCoords = f.geometry.coordinates[0];
+        const latlngs = ringCoords.map(c => [c[1], c[0]]);
+        const p = f.properties;
+        const polygon = L.polygon(latlngs, {
+            color: '#facc15',
+            weight: 2,
+            opacity: 0.85,
+            fill: true,
+            fillColor: '#fef08a',
+            fillOpacity: 0.06,
+            dashArray: '6 4'
+        });
+        polygon.bindTooltip(p.label || 'Field Boundary', { sticky: true });
+        layerGroupBoundary.addLayer(polygon);
+    });
+}
+
+async function previewFieldBoundary() {
+    if (!document.getElementById('boundaryEnabled')?.checked) {
+        if (layerGroupBoundary) layerGroupBoundary.clearLayers();
+        return;
+    }
+    const payload = getBoundaryPayload();
+    if (!payload.gdb_path) {
+        if (layerGroupBoundary) layerGroupBoundary.clearLayers();
+        return;
+    }
+    try {
+        const res = await fetch('/api/boundary/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (data.status === 'ok') {
+            renderBoundaryPreview(data.geojson);
+        } else {
+            if (layerGroupBoundary) layerGroupBoundary.clearLayers();
+        }
+    } catch (err) {
+        console.error('Boundary preview error:', err);
+        if (layerGroupBoundary) layerGroupBoundary.clearLayers();
+    }
+}
+
+function scheduleBoundaryPreview(delayMs = 350) {
+    clearTimeout(previewBoundaryTimer);
+    previewBoundaryTimer = setTimeout(previewFieldBoundary, delayMs);
+}
+
+// ---------------------------------------------------------------------------
 // Sliders & Weight Normalization
 // ---------------------------------------------------------------------------
 function initSliders() {
@@ -99,6 +185,38 @@ function initSliders() {
     sDbh.addEventListener('input', updateWeights);
     sHeight.addEventListener('input', updateWeights);
     updateWeights();
+
+    // Boundary Filter controls
+    const sBuffer = document.getElementById('boundaryBufferSlider');
+    const chkBoundary = document.getElementById('boundaryEnabled');
+    const lblBuffer = document.getElementById('lblBoundaryBuffer');
+    const bufferGroup = document.getElementById('boundaryBufferGroup');
+    const boundaryCard = document.getElementById('boundaryFilterCard');
+
+    function updateBoundaryUI() {
+        if (sBuffer && lblBuffer) {
+            const v = parseFloat(sBuffer.value);
+            lblBuffer.textContent = v.toFixed(1) + ' m';
+        }
+        if (bufferGroup) {
+            bufferGroup.style.opacity = chkBoundary && chkBoundary.checked ? '1' : '0.4';
+            bufferGroup.style.pointerEvents = chkBoundary && chkBoundary.checked ? 'auto' : 'none';
+        }
+    }
+
+    if (sBuffer) {
+        sBuffer.addEventListener('input', () => {
+            updateBoundaryUI();
+            scheduleBoundaryPreview(350);
+        });
+    }
+    if (chkBoundary) {
+        chkBoundary.addEventListener('change', () => {
+            updateBoundaryUI();
+            scheduleBoundaryPreview(50);
+        });
+    }
+    updateBoundaryUI();
 }
 
 // ---------------------------------------------------------------------------
@@ -176,6 +294,19 @@ function initMap() {
         if (e.target.checked) map.addLayer(layerGroupField);
         else map.removeLayer(layerGroupField);
     });
+
+    const chkShowCustom = document.getElementById('chkShowCustom');
+    if (chkShowCustom) {
+        chkShowCustom.addEventListener('change', (e) => {
+            Object.values(customLayers).forEach(layer => {
+                layer.visible = e.target.checked;
+                if (e.target.checked) map.addLayer(layer.layerGroup);
+                else map.removeLayer(layer.layerGroup);
+            });
+            renderCustomLayersList();
+            applyPointLabels();
+        });
+    }
 
     document.getElementById('btnResetMapZoom').addEventListener('click', fitMapExtents);
 
@@ -278,6 +409,25 @@ function bindEvents() {
         scanLayersBtn.addEventListener('click', () => {
             const path = document.getElementById('gdbPath')?.value.trim();
             if (path) scanLayers(path);
+        });
+    }
+
+    // Re-preview the field boundary whenever the survey layer changes
+    const layerSelect = document.getElementById('layerSelect');
+    if (layerSelect) {
+        layerSelect.addEventListener('change', () => scheduleBoundaryPreview(100));
+    }
+
+    const btnLoadCustomLayer = document.getElementById('btnLoadCustomLayer');
+    if (btnLoadCustomLayer) {
+        btnLoadCustomLayer.addEventListener('click', () => {
+            const path = document.getElementById('gdbPath')?.value.trim();
+            const layer = document.getElementById('customLayerSelect')?.value.trim();
+            if (path && layer) {
+                loadCustomLayer(path, layer);
+            } else {
+                alert('Please enter a valid GDB/SHP path and select a layer.');
+            }
         });
     }
 
@@ -437,6 +587,7 @@ function bindEvents() {
 // ---------------------------------------------------------------------------
 async function scanLayers(gdbPath) {
     const layerSelect = document.getElementById('layerSelect');
+    const customLayerSelect = document.getElementById('customLayerSelect');
     try {
         const res = await fetch('/api/list-layers/', {
             method: 'POST',
@@ -446,16 +597,263 @@ async function scanLayers(gdbPath) {
         const data = await res.json();
         if (data.status === 'ok') {
             layerSelect.innerHTML = '';
+            if (customLayerSelect) {
+                customLayerSelect.innerHTML = '<option value="">Select layer to view on map...</option>';
+            }
+
             data.layers.forEach(layer => {
                 const opt = document.createElement('option');
                 opt.value = layer;
                 opt.textContent = layer;
                 if (layer === data.default_layer) opt.selected = true;
                 layerSelect.appendChild(opt);
+
+                if (customLayerSelect) {
+                    const optCustom = document.createElement('option');
+                    optCustom.value = layer;
+                    optCustom.textContent = layer;
+                    customLayerSelect.appendChild(optCustom);
+                }
             });
+            // After the layer list is refreshed, live-preview the field boundary
+            scheduleBoundaryPreview(100);
         }
     } catch (e) {
         console.warn('Scan layers notice:', e);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Load & Manage Multiple Custom Vector Overlay Layers from GDB / SHP
+// ---------------------------------------------------------------------------
+async function loadCustomLayer(gdbPath, layerName) {
+    const btn = document.getElementById('btnLoadCustomLayer');
+
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Adding...';
+    }
+
+    try {
+        const res = await fetch('/api/load-custom-layer/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ gdb_path: gdbPath, layer: layerName })
+        });
+        const data = await res.json();
+
+        if (data.status === 'ok' && data.geojson) {
+            const layerId = `layer_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
+            const layerColor = getNextLayerColor();
+            const newLayerGroup = L.layerGroup().addTo(map);
+
+            const markersList = [];
+            const bounds = [];
+
+            // Auto select a default label attribute (e.g. TreeID, Species, Name, ID, or first attribute)
+            const attributes = data.attributes || [];
+            let defaultLabel = '';
+            if (attributes.length > 0) {
+                const foundDefault = attributes.find(a => {
+                    const l = a.toLowerCase();
+                    return l.includes('treeid') || l.includes('species') || l.includes('name') || l === 'id';
+                });
+                defaultLabel = foundDefault || attributes[0];
+            }
+
+            data.geojson.features.forEach((f, idx) => {
+                const c = f.geometry.coordinates;
+                const latlng = [c[1], c[0]];
+                bounds.push(latlng);
+
+                const p = f.properties;
+                const circle = L.circleMarker(latlng, {
+                    radius: 6,
+                    fillColor: layerColor,
+                    color: '#ffffff',
+                    weight: 1.5,
+                    opacity: 1,
+                    fillOpacity: 0.9
+                });
+
+                // Format popup HTML with attributes
+                let popupRows = '';
+                Object.keys(p).slice(0, 10).forEach(key => {
+                    const val = p[key];
+                    popupRows += `<div class="popup-row"><b>${key}:</b> ${val !== null ? val : 'N/A'}</div>`;
+                });
+
+                circle.bindPopup(`
+                    <div class="popup-card">
+                        <h4><i class="fa-solid fa-draw-polygon"></i> ${data.layer_name}</h4>
+                        ${popupRows}
+                    </div>
+                `);
+
+                const firstVal = Object.values(p).find(v => v !== null && v !== '');
+                const defaultHover = `${data.layer_name} #${idx + 1}: ${firstVal !== undefined ? firstVal : 'Point'}`;
+                circle.bindTooltip(defaultHover, { sticky: true });
+
+                newLayerGroup.addLayer(circle);
+                markersList.push({
+                    marker: circle,
+                    props: p,
+                    defaultTooltip: defaultHover
+                });
+            });
+
+            customLayers[layerId] = {
+                id: layerId,
+                name: data.layer_name,
+                gdbPath: gdbPath,
+                layerGroup: newLayerGroup,
+                markers: markersList,
+                attributes: attributes,
+                selectedLabelField: defaultLabel,
+                visible: true,
+                color: layerColor,
+                featureCount: data.feature_count,
+                bounds: bounds
+            };
+
+            renderCustomLayersList();
+
+            if (bounds.length > 0 && map) {
+                map.fitBounds(L.latLngBounds(bounds), { padding: [40, 40] });
+            }
+
+            applyPointLabels();
+        } else {
+            alert('Error loading layer: ' + (data.message || 'Unknown error'));
+        }
+    } catch (err) {
+        console.error('Error loading custom layer:', err);
+        alert('Failed to load layer from vector file.');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fa-solid fa-plus"></i> Add Layer';
+        }
+    }
+}
+
+function renderCustomLayersList() {
+    const container = document.getElementById('customLayersListContainer');
+    const countBadge = document.getElementById('customPointCount');
+    if (!container) return;
+
+    const layerKeys = Object.keys(customLayers);
+
+    // Update toolbar total feature count
+    let totalFeatures = 0;
+    layerKeys.forEach(k => {
+        if (customLayers[k].visible) totalFeatures += customLayers[k].featureCount;
+    });
+    if (countBadge) countBadge.textContent = totalFeatures;
+
+    if (layerKeys.length === 0) {
+        container.innerHTML = `
+            <div class="empty-layers-notice" id="emptyCustomLayersNotice">
+                <i class="fa-solid fa-circle-info"></i> Pick a layer above and click <strong>+ Add Layer</strong> to overlay vector points on the GIS map.
+            </div>
+        `;
+        return;
+    }
+
+    container.innerHTML = '';
+
+    layerKeys.forEach(layerId => {
+        const layer = customLayers[layerId];
+        const card = document.createElement('div');
+        card.className = 'custom-layer-item-card';
+        card.dataset.layerId = layerId;
+
+        // Build option list for per-layer label dropdown
+        let fieldOptions = `<option value="">(No labels / hover tooltips)</option>`;
+        layer.attributes.forEach(attr => {
+            const isSel = attr === layer.selectedLabelField ? 'selected' : '';
+            fieldOptions += `<option value="${attr}" ${isSel}>${attr}</option>`;
+        });
+
+        card.innerHTML = `
+            <div class="layer-item-header">
+                <div class="layer-title-badge">
+                    <span class="layer-color-dot" style="background-color: ${layer.color};"></span>
+                    <strong class="layer-name-text" title="${layer.name}">${layer.name}</strong>
+                    <span class="badge-purple">${layer.featureCount} pts</span>
+                </div>
+                <div class="layer-item-actions">
+                    <label class="toggle-pill-sm">
+                        <input type="checkbox" class="chk-layer-visible" data-layer-id="${layerId}" ${layer.visible ? 'checked' : ''}>
+                        <span>Show</span>
+                    </label>
+                    <button type="button" class="btn-remove-layer" data-layer-id="${layerId}" title="Remove layer">&times;</button>
+                </div>
+            </div>
+            <div class="layer-item-controls">
+                <div class="form-group-xs">
+                    <label><i class="fa-solid fa-tag"></i> Label Field:</label>
+                    <select class="select-layer-label-field" data-layer-id="${layerId}">
+                        ${fieldOptions}
+                    </select>
+                </div>
+                <button type="button" class="btn-xs btn-outline-purple btn-zoom-layer" data-layer-id="${layerId}" title="Zoom to bounds">
+                    <i class="fa-solid fa-compress"></i> Zoom
+                </button>
+            </div>
+        `;
+        container.appendChild(card);
+    });
+
+    // Wire listeners for dynamic layer controls
+    container.querySelectorAll('.chk-layer-visible').forEach(chk => {
+        chk.addEventListener('change', (e) => {
+            const lid = e.target.dataset.layerId;
+            if (customLayers[lid]) {
+                customLayers[lid].visible = e.target.checked;
+                if (e.target.checked) map.addLayer(customLayers[lid].layerGroup);
+                else map.removeLayer(customLayers[lid].layerGroup);
+                renderCustomLayersList();
+                applyPointLabels();
+            }
+        });
+    });
+
+    container.querySelectorAll('.select-layer-label-field').forEach(sel => {
+        sel.addEventListener('change', (e) => {
+            const lid = e.target.dataset.layerId;
+            if (customLayers[lid]) {
+                customLayers[lid].selectedLabelField = e.target.value;
+                applyPointLabels();
+            }
+        });
+    });
+
+    container.querySelectorAll('.btn-zoom-layer').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const lid = btn.dataset.layerId;
+            if (customLayers[lid] && customLayers[lid].bounds.length > 0 && map) {
+                map.fitBounds(L.latLngBounds(customLayers[lid].bounds), { padding: [40, 40] });
+            }
+        });
+    });
+
+    container.querySelectorAll('.btn-remove-layer').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const lid = btn.dataset.layerId;
+            removeCustomLayer(lid);
+        });
+    });
+}
+
+function removeCustomLayer(layerId) {
+    if (customLayers[layerId]) {
+        if (map && map.hasLayer(customLayers[layerId].layerGroup)) {
+            map.removeLayer(customLayers[layerId].layerGroup);
+        }
+        delete customLayers[layerId];
+        renderCustomLayersList();
+        applyPointLabels();
     }
 }
 
@@ -531,7 +929,11 @@ async function runAssignment() {
         weight_dbh: wd / total,
         weight_height: wh / total,
         method: document.getElementById('solverMethod').value,
-        
+
+        // Boundary Filter (field survey area clip)
+        boundary_enabled: document.getElementById('boundaryEnabled').checked,
+        boundary_buffer_m: parseFloat(document.getElementById('boundaryBufferSlider').value),
+
         // Exclusion filters
         min_height_class: document.getElementById('minHeightClass').value,
         max_height_class: document.getElementById('maxHeightClass').value,
@@ -915,12 +1317,16 @@ function renderMapFeatures(geojson) {
 function applyPointLabels() {
     const checkedBoxes = Array.from(document.querySelectorAll('.chk-label-field:checked')).map(cb => cb.value);
     const target = document.querySelector('input[name="pointLabelTarget"]:checked')?.value || 'all';
+    const customAttrField = document.getElementById('customLabelFieldSelect')?.value;
+
+    const hasCheckedLabels = checkedBoxes.length > 0;
+    const hasCustomLabel = !!customAttrField;
 
     // Update badge & button state
     const badge = document.getElementById('labelCountBadge');
     const btn = document.getElementById('btnPointLabels');
     if (badge) {
-        if (checkedBoxes.length > 0) {
+        if (hasCheckedLabels) {
             badge.textContent = checkedBoxes.length;
             badge.style.display = 'inline-block';
             btn?.classList.add('active-filter');
@@ -930,56 +1336,89 @@ function applyPointLabels() {
         }
     }
 
-    if (!currentPointMarkers || currentPointMarkers.length === 0) return;
+    // Process LiDAR & Field markers
+    if (currentPointMarkers && currentPointMarkers.length > 0) {
+        currentPointMarkers.forEach(item => {
+            const isTargetMatch = (target === 'all') || (target === item.type);
 
-    currentPointMarkers.forEach(item => {
-        const isTargetMatch = (target === 'all') || (target === item.type);
+            if (!hasCheckedLabels || !isTargetMatch) {
+                // Revert to standard hover tooltip
+                item.marker.unbindTooltip();
+                item.marker.bindTooltip(item.defaultTooltip, { sticky: true });
+                return;
+            }
 
-        if (checkedBoxes.length === 0 || !isTargetMatch) {
-            // Revert to standard hover tooltip
-            item.marker.unbindTooltip();
-            item.marker.bindTooltip(item.defaultTooltip, { sticky: true });
-            return;
-        }
-
-        // Build formatted label parts
-        const parts = [];
-        const p = item.props;
-        checkedBoxes.forEach(field => {
-            if (field === 'id') {
-                const idVal = (item.type === 'lidar') ? p.tree_id : p.field_id;
-                if (idVal !== undefined && idVal !== null) parts.push(`#${idVal}`);
-            } else if (field === 'dbh') {
-                if (p.dbh_cm !== undefined && p.dbh_cm !== null) parts.push(`${p.dbh_cm}cm`);
-            } else if (field === 'height_class') {
-                if (p.height_class !== undefined && p.height_class !== null) parts.push(`Cl:${p.height_class}`);
-            } else if (field === 'height') {
-                if (item.type === 'lidar' && p.height_m !== undefined && p.height_m !== null) {
-                    parts.push(`${p.height_m}m`);
-                } else if (item.type === 'field' && p.height_range) {
-                    parts.push(p.height_range);
+            // Build formatted label parts
+            const parts = [];
+            const p = item.props;
+            checkedBoxes.forEach(field => {
+                if (field === 'id') {
+                    const idVal = (item.type === 'lidar') ? p.tree_id : p.field_id;
+                    if (idVal !== undefined && idVal !== null) parts.push(`#${idVal}`);
+                } else if (field === 'dbh') {
+                    if (p.dbh_cm !== undefined && p.dbh_cm !== null) parts.push(`${p.dbh_cm}cm`);
+                } else if (field === 'height_class') {
+                    if (p.height_class !== undefined && p.height_class !== null) parts.push(`Cl:${p.height_class}`);
+                } else if (field === 'height') {
+                    if (item.type === 'lidar' && p.height_m !== undefined && p.height_m !== null) {
+                        parts.push(`${p.height_m}m`);
+                    } else if (item.type === 'field' && p.height_range) {
+                        parts.push(p.height_range);
+                    }
+                } else if (field === 'species') {
+                    if (p.species && p.species !== '-') parts.push(p.species);
+                } else if (field === 'volume') {
+                    if (p.volume_m3 !== undefined && p.volume_m3 !== null) parts.push(`${p.volume_m3}m³`);
                 }
-            } else if (field === 'species') {
-                if (p.species && p.species !== '-') parts.push(p.species);
-            } else if (field === 'volume') {
-                if (p.volume_m3 !== undefined && p.volume_m3 !== null) parts.push(`${p.volume_m3}m³`);
+            });
+
+            if (parts.length === 0) {
+                item.marker.unbindTooltip();
+                item.marker.bindTooltip(item.defaultTooltip, { sticky: true });
+                return;
+            }
+
+            const labelText = parts.join(' | ');
+            item.marker.unbindTooltip();
+            item.marker.bindTooltip(labelText, {
+                permanent: true,
+                direction: 'top',
+                className: `map-point-label map-point-label-${item.type}`,
+                offset: [0, -6]
+            }).openTooltip();
+        });
+    }
+
+    // Process Custom Layer Point Markers for all loaded custom layers
+    Object.values(customLayers).forEach(layer => {
+        if (!layer.markers) return;
+
+        const isTargetMatch = (target === 'all') || (target === 'custom');
+        const selectedField = layer.selectedLabelField;
+
+        layer.markers.forEach(item => {
+            if (!layer.visible || !isTargetMatch || !selectedField) {
+                item.marker.unbindTooltip();
+                item.marker.bindTooltip(item.defaultTooltip, { sticky: true });
+                return;
+            }
+
+            const p = item.props;
+            const val = p[selectedField];
+            if (val !== undefined && val !== null && val !== '') {
+                const labelText = `${selectedField}: ${val}`;
+                item.marker.unbindTooltip();
+                item.marker.bindTooltip(labelText, {
+                    permanent: true,
+                    direction: 'top',
+                    className: 'map-point-label map-point-label-custom',
+                    offset: [0, -6]
+                }).openTooltip();
+            } else {
+                item.marker.unbindTooltip();
+                item.marker.bindTooltip(item.defaultTooltip, { sticky: true });
             }
         });
-
-        if (parts.length === 0) {
-            item.marker.unbindTooltip();
-            item.marker.bindTooltip(item.defaultTooltip, { sticky: true });
-            return;
-        }
-
-        const labelText = parts.join(' | ');
-        item.marker.unbindTooltip();
-        item.marker.bindTooltip(labelText, {
-            permanent: true,
-            direction: 'top',
-            className: `map-point-label map-point-label-${item.type}`,
-            offset: [0, -6]
-        }).openTooltip();
     });
 }
 
@@ -989,6 +1428,11 @@ function fitMapExtents() {
     if (layerGroupLines) layerGroupLines.eachLayer(l => allLayers.push(l));
     if (layerGroupLidar) layerGroupLidar.eachLayer(l => allLayers.push(l));
     if (layerGroupField) layerGroupField.eachLayer(l => allLayers.push(l));
+    Object.values(customLayers).forEach(layer => {
+        if (layer.visible && layer.layerGroup) {
+            layer.layerGroup.eachLayer(l => allLayers.push(l));
+        }
+    });
 
     if (allLayers.length > 0) {
         const group = L.featureGroup(allLayers);

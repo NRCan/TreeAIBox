@@ -5,8 +5,6 @@ import traceback
 from pathlib import Path
 from collections import defaultdict
 import numpy as np
-from scipy.spatial import ConvexHull
-from scipy.spatial import Delaunay
 
 from django.shortcuts import render
 from django.http import JsonResponse, HttpResponse, FileResponse, Http404
@@ -25,6 +23,8 @@ from semantic_field_assignment import (
     write_outputs,
     class_to_height_range,
     class_to_midpoint_height,
+    clip_lidar_to_boundary,
+    build_field_boundary,
     HEIGHT_CLASS_RANGES,
     HEIGHT_CLASS_MIDPOINTS
 )
@@ -233,6 +233,10 @@ def run_match(request):
         dbh_scale = float(data.get('dbh_scale', 12.0))
         method = data.get('method', 'optimal')
 
+        # Boundary Filter (convex hull + buffer around field points, like Step 1)
+        boundary_enabled = bool(data.get('boundary_enabled', True))
+        boundary_buffer_m = float(data.get('boundary_buffer_m', 5.0))
+
         # Exclusion Filters
         min_hc = data.get('min_height_class')
         min_hc = int(min_hc) if min_hc is not None and str(min_hc).strip() != '' else 1
@@ -297,52 +301,20 @@ def run_match(request):
                 continue
 
             # ------------------------------------------------------------------
-            # Spatial Clipping: filter LiDAR to field survey boundary (convex hull)
+            # Boundary Filter: clip LiDAR to buffered field-survey boundary
+            # (convex hull of field points + buffer, mirrors Step-1 boundary_polygon)
             # ------------------------------------------------------------------
             n_lidar_raw = len(lidar_trees)
-            hull_coords_wgs84 = []  # filled after coordinate transform below
+            boundary_geom = None
 
-            if len(lidar_trees) > 3:
+            if boundary_enabled:
                 try:
-                    # Build convex hull from field-survey point coordinates (native CRS)
-                    field_xy = np.array([
-                        [ft['x'], ft['y']] for ft in field_trees
-                        if ft.get('x') is not None and ft.get('y') is not None
-                    ])
-
-                    if len(field_xy) >= 3:
-                        hull = ConvexHull(field_xy)
-                        hull_pts = field_xy[hull.vertices]
-
-                        # Expand hull outward by tolerance_m (simple centroid-offset method)
-                        centroid = hull_pts.mean(axis=0)
-                        expanded_pts = []
-                        for pt in hull_pts:
-                            direction = pt - centroid
-                            norm = np.linalg.norm(direction)
-                            if norm > 0:
-                                expanded_pts.append(pt + direction / norm * tolerance)
-                            else:
-                                expanded_pts.append(pt)
-                        expanded_hull_pts = np.array(expanded_pts)
-
-                        # Use Delaunay triangulation of expanded hull for point-in-polygon test
-                        tri = Delaunay(expanded_hull_pts)
-
-                        def _in_hull(px, py):
-                            return tri.find_simplex(np.array([[px, py]])) >= 0
-
-                        clipped = [
-                            lt for lt in lidar_trees
-                            if lt.get('x') is not None and lt.get('y') is not None
-                            and _in_hull(lt['x'], lt['y'])
-                        ]
-                        lidar_trees = clipped
-                        hull_vertices_native = np.vstack([expanded_hull_pts, expanded_hull_pts[0]])  # close ring
-
+                    lidar_trees, boundary_geom = clip_lidar_to_boundary(
+                        lidar_trees, field_trees, buffer_m=boundary_buffer_m
+                    )
                 except Exception as hull_err:
                     # Non-fatal: fall back to unclipped LiDAR
-                    print(f"[WARN] Convex hull clipping failed: {hull_err}")
+                    print(f"[WARN] Boundary clipping failed: {hull_err}")
 
             n_lidar_clipped = n_lidar_raw - len(lidar_trees)
 
@@ -377,22 +349,12 @@ def run_match(request):
             # GeoJSON
             geojson_data = build_leaflet_geojson(assignments, lidar_trees, field_trees)
 
-            # Append hull polygon as a GeoJSON feature (native→WGS84 via the same transformer used in build_leaflet_geojson)
-            try:
-                from pyproj import Transformer as _T
-                src_crs = field_trees[0].get('crs') if field_trees else None
-                _xf = _T.from_crs(src_crs, 'EPSG:4326', always_xy=True) if src_crs else None
-
-                field_xy_for_hull = np.array([
-                    [ft['x'], ft['y']] for ft in field_trees
-                    if ft.get('x') is not None and ft.get('y') is not None
-                ])
-                if len(field_xy_for_hull) >= 3:
-                    hull2 = ConvexHull(field_xy_for_hull)
-                    hull_ring = np.vstack([
-                        field_xy_for_hull[hull2.vertices],
-                        field_xy_for_hull[hull2.vertices[0]]   # close ring
-                    ])
+            # Append boundary polygon as a GeoJSON feature (projected metres → WGS84)
+            if boundary_geom is not None and boundary_geom.get('polygon') is not None:
+                try:
+                    from pyproj import Transformer as _T
+                    src_crs = boundary_geom.get('crs') or (field_trees[0].get('crs') if field_trees else None)
+                    _xf = _T.from_crs(src_crs, 'EPSG:4326', always_xy=True) if src_crs else None
 
                     def _proj(x, y):
                         if _xf:
@@ -400,21 +362,22 @@ def run_match(request):
                             return [float(lon), float(lat)]
                         return [float(x), float(y)]
 
-                    hull_wgs84 = [_proj(p[0], p[1]) for p in hull_ring]
+                    ext = list(boundary_geom['polygon'].exterior.coords)
+                    ring_wgs84 = [_proj(p[0], p[1]) for p in ext]
 
                     geojson_data['features'].append({
                         'type': 'Feature',
-                        'geometry': {'type': 'Polygon', 'coordinates': [hull_wgs84]},
+                        'geometry': {'type': 'Polygon', 'coordinates': [ring_wgs84]},
                         'properties': {
                             'type': 'field_boundary',
-                            'label': 'Field Survey Boundary (Convex Hull)',
+                            'label': 'Field Boundary (%sm buffer)' % boundary_geom['buffer_m'],
                             'lidar_raw': n_lidar_raw,
                             'lidar_after_clip': len(lidar_trees),
                             'lidar_clipped_out': n_lidar_clipped
                         }
                     })
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
             # Metrics
             matched = [a for a in assignments if a.get('lidar_tree_id') is not None and a.get('field_treeid') is not None]
@@ -494,6 +457,8 @@ def run_match(request):
                 'total_lidar': n_lidar,
                 'total_lidar_raw': n_lidar_raw,
                 'lidar_clipped_out': n_lidar_clipped,
+                'boundary_buffer_m': boundary_buffer_m,
+                'boundary_enabled': boundary_enabled,
                 'matched_count': n_matched,
                 'lidar_match_rate': round((n_matched / max(n_lidar, 1)) * 100, 1),
                 'field_match_rate': round((n_matched / max(n_field, 1)) * 100, 1),
@@ -667,3 +632,196 @@ def download_file(request):
     filename = os.path.basename(path)
     response = FileResponse(open(path, 'rb'), as_attachment=True, filename=filename)
     return response
+
+
+@csrf_exempt
+def load_custom_layer(request):
+    """API to load a custom point/vector layer from GDB or vector file as WGS84 GeoJSON."""
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'POST required'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        raw_path = data.get('gdb_path', '').strip()
+        layer_name = data.get('layer', '').strip()
+
+        if not raw_path:
+            return JsonResponse({'status': 'error', 'message': 'gdb_path is required'}, status=400)
+
+        resolved_path = resolve_gdb_path(raw_path)
+        if not os.path.exists(resolved_path):
+            return JsonResponse({'status': 'error', 'message': f'Path not found: {raw_path}'}, status=404)
+
+        import pyogrio
+        from pyproj import Transformer
+
+        available_layers = pyogrio.list_layers(resolved_path)
+        layer_names = [l[0] if isinstance(l, (list, tuple, np.ndarray)) else str(l) for l in available_layers]
+        if not layer_name or layer_name not in layer_names:
+            layer_name = layer_names[0] if layer_names else None
+
+        if not layer_name:
+            return JsonResponse({'status': 'error', 'message': 'No valid vector layers found'}, status=404)
+
+        gdf = pyogrio.read_dataframe(resolved_path, layer=layer_name)
+        if gdf.empty:
+            return JsonResponse({
+                'status': 'ok',
+                'layer_name': layer_name,
+                'attributes': [],
+                'feature_count': 0,
+                'geojson': {'type': 'FeatureCollection', 'features': []}
+            })
+
+        # Extract attribute column names (excluding geometry)
+        attribute_cols = [str(col) for col in gdf.columns if col != 'geometry']
+
+        # Setup CRS transformer to WGS84 (EPSG:4326)
+        transformer = None
+        if gdf.crs:
+            try:
+                transformer = Transformer.from_crs(gdf.crs, "EPSG:4326", always_xy=True)
+            except Exception:
+                transformer = None
+
+        features = []
+        for idx, row in gdf.iterrows():
+            geom = row.geometry
+            if geom is None or geom.is_empty:
+                continue
+
+            # Compute point coordinate (centroid if polygon/multiline)
+            centroid = geom.centroid if hasattr(geom, 'centroid') else geom
+            x, y = float(centroid.x), float(centroid.y)
+
+            if transformer:
+                try:
+                    lon, lat = transformer.transform(x, y)
+                    coords = [float(lon), float(lat)]
+                except Exception:
+                    coords = [x, y]
+            else:
+                coords = [x, y]
+
+            # Collect serializable properties
+            props = {}
+            for col in attribute_cols:
+                val = row[col]
+                if val is None or (isinstance(val, float) and np.isnan(val)):
+                    props[col] = None
+                elif isinstance(val, (np.integer, np.int64, np.int32)):
+                    props[col] = int(val)
+                elif isinstance(val, (np.floating, np.float64, np.float32)):
+                    props[col] = float(val)
+                elif hasattr(val, 'isoformat'):
+                    props[col] = val.isoformat()
+                else:
+                    props[col] = str(val)
+
+            features.append({
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": coords
+                },
+                "properties": props
+            })
+
+        geojson = {
+            "type": "FeatureCollection",
+            "features": features
+        }
+
+        return JsonResponse({
+            'status': 'ok',
+            'layer_name': layer_name,
+            'attributes': attribute_cols,
+            'feature_count': len(features),
+            'geojson': geojson
+        })
+
+    except Exception as e:
+        traceback.print_exc()
+        return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+
+@csrf_exempt
+def boundary_preview(request):
+    """API to preview the field-survey boundary polygon (convex hull + buffer)
+    as WGS84 GeoJSON, so the map can live-update while the user drags the
+    boundary-buffer slider. Mirrors field_etl's /api/boundary/ but uses the
+    matcher's own field-point reading + exclusion filters for consistency."""
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'POST required'}, status=405)
+    try:
+        data = json.loads(request.body)
+        gdb_path = data.get('gdb_path', '').strip()
+        layer = data.get('layer', '').strip()
+        buffer_m = float(data.get('buffer_m', 5.0))
+
+        # Same exclusion filters as run_match
+        min_hc = data.get('min_height_class')
+        min_hc = int(min_hc) if min_hc is not None and str(min_hc).strip() != '' else 1
+        max_hc = data.get('max_height_class')
+        max_hc = int(max_hc) if max_hc is not None and str(max_hc).strip() != '' else 5
+        min_dbh = data.get('min_dbh')
+        min_dbh = float(min_dbh) if min_dbh is not None and str(min_dbh).strip() != '' else None
+        max_dbh = data.get('max_dbh')
+        max_dbh = float(max_dbh) if max_dbh is not None and str(max_dbh).strip() != '' else None
+        species_filter = data.get('species_filter')
+
+        if not gdb_path or not os.path.exists(resolve_gdb_path(gdb_path)):
+            return JsonResponse({'status': 'error', 'message': 'Field data path invalid'}, status=400)
+
+        field_trees = read_field_points(
+            gdb_path=gdb_path,
+            layer=layer if layer else None,
+            min_height_class=min_hc,
+            max_height_class=max_hc,
+            min_dbh=min_dbh,
+            max_dbh=max_dbh,
+            species_filter=species_filter
+        )
+        if not field_trees:
+            return JsonResponse({'status': 'ok', 'field_count': 0, 'geojson': None})
+
+        boundary = build_field_boundary(field_trees, buffer_m=buffer_m)
+        polygon = boundary.get('polygon')
+        if polygon is None:
+            return JsonResponse({'status': 'ok', 'field_count': len(field_trees), 'geojson': None})
+
+        # Reproject boundary ring to WGS84 for the Leaflet map
+        from pyproj import Transformer as _T
+        src_crs = boundary.get('crs') or field_trees[0].get('crs')
+        _xf = _T.from_crs(src_crs, 'EPSG:4326', always_xy=True) if src_crs else None
+
+        def _proj(x, y):
+            if _xf:
+                lon, lat = _xf.transform(float(x), float(y))
+                return [float(lon), float(lat)]
+            return [float(x), float(y)]
+
+        ring = [_proj(p[0], p[1]) for p in list(polygon.exterior.coords)]
+        geojson = {
+            'type': 'FeatureCollection',
+            'features': [{
+                'type': 'Feature',
+                'geometry': {'type': 'Polygon', 'coordinates': [ring]},
+                'properties': {
+                    'type': 'field_boundary',
+                    'label': 'Field Boundary (%.1fm buffer)' % buffer_m,
+                    'buffer_m': boundary['buffer_m'],
+                    'field_count': len(field_trees),
+                }
+            }]
+        }
+        return JsonResponse({
+            'status': 'ok',
+            'field_count': len(field_trees),
+            'buffer_m': boundary['buffer_m'],
+            'geojson': geojson,
+        })
+    except Exception as e:
+        traceback.print_exc()
+        return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+

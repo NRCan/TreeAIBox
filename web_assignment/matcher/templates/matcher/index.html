@@ -15,7 +15,7 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
     <!-- App Stylesheet -->
-    <link rel="stylesheet" href="/static/matcher/css/style.css?v=20260814j">
+    <link rel="stylesheet" href="/static/matcher/css/style.css?v=20260817b">
 </head>
 <body class="dark-theme">
     <!-- Main Top Navigation -->
@@ -28,6 +28,7 @@
         </div>
         <div class="header-right">
             <span class="status-badge" id="backendStatus"><i class="fa-solid fa-circle-check"></i> Django Engine Active</span>
+            <a href="/field-etl/" class="status-badge" style="text-decoration:none;background:rgba(56,189,248,0.15);border-color:rgba(56,189,248,0.35);color:#38bdf8;"><i class="fa-solid fa-wand-magic-sparkles"></i> Step 1: ETL</a>
             <a href="https://github.com" target="_blank" class="icon-link"><i class="fa-brands fa-github"></i></a>
         </div>
     </header>
@@ -46,10 +47,10 @@
                     </div>
 
                     <div class="form-group">
-                        <label for="gdbPath">Field Survey File (.gdb / .shp):</label>
+                        <label for="gdbPath">Field Survey File (.gdb / .shp / .gpkg):</label>
                         <div class="input-with-btn">
-                            <input type="text" id="gdbPath" value="{{ default_gdb }}" placeholder="Path to .gdb folder or shapefile...">
-                            <button type="button" class="btn-sm" id="pickGdbBtn" title="Pick / Browse for GDB or vector file">
+                            <input type="text" id="gdbPath" value="{{ default_gdb }}" placeholder="Path to .gdb folder, .shp or .gpkg...">
+                            <button type="button" class="btn-sm" id="pickGdbBtn" title="Pick / Browse for GDB, SHP or GeoPackage">
                                 <i class="fa-solid fa-folder-open"></i> Browse
                             </button>
                             <button type="button" class="btn-sm" id="scanLayersBtn" title="Inspect & auto-detect layers">
@@ -103,6 +104,33 @@
                     </div>
                 </div>
 
+                <!-- Section: GIS Custom Layer Manager (Multi-Layer Support) -->
+                <div class="panel-card" id="customLayerManagerCard">
+                    <div class="card-header">
+                        <i class="fa-solid fa-layer-group card-icon"></i>
+                        <h2>GIS Custom Layer Manager</h2>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="customLayerSelect"><i class="fa-solid fa-draw-polygon"></i> Select Vector Overlay Layer:</label>
+                        <div class="input-with-btn">
+                            <select id="customLayerSelect">
+                                <option value="">Select layer from GDB/SHP...</option>
+                            </select>
+                            <button type="button" class="btn-sm" id="btnLoadCustomLayer" title="Add vector layer onto GIS map">
+                                <i class="fa-solid fa-plus"></i> Add Layer
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Multi-Layer Stack List Container -->
+                    <div class="custom-layers-stack-container" id="customLayersListContainer">
+                        <div class="empty-layers-notice" id="emptyCustomLayersNotice">
+                            <i class="fa-solid fa-circle-info"></i> Pick a layer above and click <strong>+ Add Layer</strong> to overlay vector points on the GIS map.
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Section 2: Exclusion Filters -->
                 <div class="panel-card">
                     <div class="card-header">
@@ -146,6 +174,30 @@
                     <div class="form-group">
                         <label for="speciesFilter">Species Filter (Exact / Substring):</label>
                         <input type="text" id="speciesFilter" placeholder="e.g. Pine, Oak, BF... (leave empty for all)">
+                    </div>
+                </div>
+
+                <!-- Section 2.5: Boundary Filter (field survey area clip) -->
+                <div class="panel-card" id="boundaryFilterCard">
+                    <div class="card-header">
+                        <i class="fa-solid fa-draw-polygon card-icon"></i>
+                        <h2>2.5 Boundary Filter</h2>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="toggle-pill boundary-toggle">
+                            <input type="checkbox" id="boundaryEnabled" checked>
+                            <span><i class="fa-solid fa-location-crosshairs"></i> Clip LiDAR to field survey boundary</span>
+                        </label>
+                        <p class="field-hint" id="boundaryHint">Filters out LiDAR detections outside the buffered convex hull of field points, so detection / match percentages reflect only trees within the surveyed plot.</p>
+                    </div>
+
+                    <div class="slider-group" id="boundaryBufferGroup">
+                        <div class="slider-header">
+                            <span>Boundary Buffer:</span>
+                            <span class="weight-pct" id="lblBoundaryBuffer">5.0 m</span>
+                        </div>
+                        <input type="range" id="boundaryBufferSlider" min="0" max="30" step="0.5" value="5.0">
                     </div>
                 </div>
 
@@ -245,6 +297,7 @@
                         <label class="toggle-pill"><input type="checkbox" id="chkShowLines" checked> <span>Connection Lines</span></label>
                         <label class="toggle-pill"><input type="checkbox" id="chkShowLidar" checked> <span class="cyan-dot"></span> <span>LiDAR Trees</span></label>
                         <label class="toggle-pill"><input type="checkbox" id="chkShowField" checked> <span class="orange-dot"></span> <span>Field Survey</span></label>
+                        <label class="toggle-pill"><input type="checkbox" id="chkShowCustom" checked> <span class="purple-dot"></span> <span>Custom Points (<span id="customPointCount">0</span>)</span></label>
                     </div>
                     <div class="toolbar-right">
                         <!-- Point Labels Dropdown -->
@@ -270,6 +323,7 @@
                                     <label class="toggle-pill"><input type="radio" name="pointLabelTarget" value="all" checked> <span>All</span></label>
                                     <label class="toggle-pill"><input type="radio" name="pointLabelTarget" value="lidar"> <span>LiDAR</span></label>
                                     <label class="toggle-pill"><input type="radio" name="pointLabelTarget" value="field"> <span>Field</span></label>
+                                    <label class="toggle-pill"><input type="radio" name="pointLabelTarget" value="custom"> <span>Custom</span></label>
                                 </div>
                             </div>
                         </div>
@@ -322,6 +376,13 @@
                                 <div class="legend-desc">
                                     <div class="legend-title">Orange Circle Point</div>
                                     <div class="legend-sub"><strong>Field Survey Tree</strong>: Ground-truth GPS field tagged tree.</div>
+                                </div>
+                            </div>
+                            <div class="legend-item">
+                                <span class="point-swatch swatch-purple-point"></span>
+                                <div class="legend-desc">
+                                    <div class="legend-title">Purple Circle Point</div>
+                                    <div class="legend-sub"><strong>Custom Points Layer</strong>: Features loaded from custom GDB / SHP vector layer.</div>
                                 </div>
                             </div>
                         </div>
@@ -744,6 +805,6 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
-    <script src="/static/matcher/js/app.js?v=20260814m"></script>
+    <script src="/static/matcher/js/app.js?v=20260817b"></script>
 </body>
 </html>

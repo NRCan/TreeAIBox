@@ -265,6 +265,24 @@ input[type="range"] {
     cursor: pointer;
 }
 
+/* Boundary Filter Card */
+.field-hint {
+    font-size: 10.5px;
+    line-height: 1.45;
+    color: var(--text-muted);
+    margin: 2px 0 0 2px;
+}
+
+.boundary-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-primary);
+    cursor: pointer;
+    user-select: none;
+}
+
 /* Run Button */
 .btn-primary {
     background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
@@ -533,6 +551,257 @@ input[type="range"] {
     display: inline-block;
 }
 
+.purple-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: #c084fc;
+    display: inline-block;
+}
+
+.btn-link-purple {
+    background: transparent;
+    border: none;
+    color: #c084fc;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 0;
+    text-decoration: underline;
+    transition: color 0.2s;
+}
+
+.btn-link-purple:hover {
+    color: #e9d5ff;
+}
+
+.badge-purple {
+    background-color: #7e22ce;
+    color: #f3e8ff;
+    font-size: 10.5px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 10px;
+    line-height: 1.2;
+}
+
+/* Multi-Layer Sidebar Cards */
+.custom-layers-stack-container {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.empty-layers-notice {
+    font-size: 11.5px;
+    color: var(--text-muted);
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px dashed rgba(168, 85, 247, 0.3);
+    border-radius: 6px;
+    padding: 10px;
+    line-height: 1.4;
+}
+
+.custom-layer-item-card {
+    background: rgba(15, 23, 42, 0.95);
+    border: 1px solid rgba(168, 85, 247, 0.35);
+    border-radius: 8px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    transition: all 0.2s ease;
+}
+
+.custom-layer-item-card:hover {
+    border-color: rgba(168, 85, 247, 0.6);
+}
+
+.layer-item-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+}
+
+.layer-title-badge {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow: hidden;
+}
+
+.layer-color-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    border: 1.5px solid #ffffff;
+    flex-shrink: 0;
+}
+
+.layer-name-text {
+    font-size: 12px;
+    font-weight: 700;
+    color: #f8fafc;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 130px;
+}
+
+.layer-item-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.btn-remove-layer {
+    background: transparent;
+    border: none;
+    color: #ef4444;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    line-height: 1;
+    padding: 0 4px;
+    transition: color 0.15s;
+}
+
+.btn-remove-layer:hover {
+    color: #f87171;
+}
+
+.layer-item-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.form-group-xs {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    flex: 1;
+}
+
+.form-group-xs label {
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+.select-layer-label-field {
+    background-color: #0f172a;
+    border: 1px solid rgba(168, 85, 247, 0.4);
+    border-radius: 4px;
+    padding: 4px 6px;
+    color: #f8fafc;
+    font-size: 11px;
+    width: 100%;
+}
+
+.btn-xs {
+    padding: 4px 8px;
+    font-size: 11px;
+    border-radius: 4px;
+    cursor: pointer;
+    border: 1px solid var(--border-color);
+    background: #1e293b;
+    color: #f8fafc;
+    white-space: nowrap;
+    transition: all 0.2s;
+}
+
+.btn-outline-purple {
+    background: transparent;
+    border-color: rgba(168, 85, 247, 0.4);
+    color: #c084fc;
+}
+
+.btn-outline-purple:hover {
+    background: rgba(168, 85, 247, 0.2);
+    color: #e9d5ff;
+}
+
+.toggle-pill-sm {
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    color: #cbd5e1;
+}
+
+/* Sidebar Custom Fields Checklist Box */
+.custom-fields-box {
+    margin-top: 10px;
+    background: rgba(15, 23, 42, 0.9);
+    border: 1px solid rgba(168, 85, 247, 0.35);
+    border-radius: 8px;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.custom-fields-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    padding-bottom: 6px;
+    font-size: 11.5px;
+    font-weight: 700;
+    color: #c084fc;
+}
+
+.custom-fields-header .fields-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.custom-fields-checklist {
+    max-height: 180px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-right: 4px;
+}
+
+.custom-fields-checklist::-webkit-scrollbar {
+    width: 4px;
+}
+
+.custom-fields-checklist::-webkit-scrollbar-thumb {
+    background: rgba(168, 85, 247, 0.4);
+    border-radius: 2px;
+}
+
+.field-check-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11.5px;
+    color: #e2e8f0;
+    cursor: pointer;
+    padding: 3px 6px;
+    border-radius: 4px;
+    transition: background 0.15s;
+}
+
+.field-check-item:hover {
+    background: rgba(168, 85, 247, 0.15);
+}
+
+.field-check-item input[type="checkbox"] {
+    accent-color: #a855f7;
+    cursor: pointer;
+}
+
 .btn-tool {
     background-color: #1e293b;
     border: 1px solid var(--border-color);
@@ -681,6 +950,11 @@ input[type="range"] {
     color: #fed7aa;
 }
 
+.leaflet-tooltip.map-point-label-custom {
+    border-color: #a855f7;
+    color: #e9d5ff;
+}
+
 .map-wrapper-relative {
     position: relative;
     flex: 1;
@@ -779,6 +1053,7 @@ input[type="range"] {
 .swatch-red { background: repeating-linear-gradient(90deg, #f43f5e 0, #f43f5e 4px, transparent 4px, transparent 7px); }
 .swatch-cyan-point { background-color: #38bdf8; }
 .swatch-orange-point { background-color: #fb923c; }
+.swatch-purple-point { background-color: #c084fc; border-color: #a855f7; }
 
 .legend-desc {
     display: flex;

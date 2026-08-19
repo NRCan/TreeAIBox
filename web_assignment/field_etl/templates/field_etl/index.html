@@ -1,0 +1,91 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TreeToolBox — Step 1: Field Point ETL</title>
+  <link rel="stylesheet" href="{% static 'field_etl/leaflet/leaflet.css' %}">
+  <link rel="stylesheet" href="{% static 'field_etl/css/style.css' %}">
+</head>
+<body>
+  <header class="etl-header">
+    <div>
+      <h1>Step 1 · Field Point ETL <span class="badge">Cleaning → Export</span></h1>
+      <p class="sub">Clean source survey points (DBH from perimeter, anomaly flags) and export clean points, transect line &amp; boundary polygon.</p>
+    </div>
+    <nav class="header-nav">
+      <a href="/" class="btn ghost">← Field Matcher (Step 2)</a>
+    </nav>
+  </header>
+
+  <main class="etl-main">
+    <!-- LEFT: control panel -->
+    <aside class="panel">
+      <section>
+        <h3>1. Source data</h3>
+        <label for="srcPath">Source: vector (.gdb/.shp/.gpkg) or CSV</label>
+        <input id="srcPath" type="text" value="{{ default_source }}" placeholder="path to .gdb, .shp, .gpkg or .geojson">
+        <div class="row">
+          <button id="scanBtn" class="btn">Scan layers</button>
+          <button id="pickBtn" class="btn ghost">Browse…</button>
+        </div>
+        <label for="layerSel">Layer <span class="muted" style="color:#8b98a5">(CSV = single)</span></label>
+        <select id="layerSel"><option value="">— select / auto —</option></select>
+        <label class="chk"><input type="checkbox" id="deriveDbh" checked> Derive DBH from perimeter (÷&nbsp;π)</label>
+        <button id="loadBtn" class="btn primary">Process &amp; map</button>
+      </section>
+
+      <section>
+        <h3>2. Layer manager</h3>
+        <label class="chk"><input type="checkbox" checked data-layer="points"> Field points (clean)</label>
+        <label class="chk"><input type="checkbox" checked data-layer="flagged"> Flagged anomalies</label>
+        <label class="chk"><input type="checkbox" checked data-layer="line"> Transect line</label>
+        <label class="chk"><input type="checkbox" checked data-layer="boundary"> Boundary polygon</label>
+        <div class="sep"></div>
+        <label class="chk"><input type="checkbox" id="showLabels"> Show labels</label>
+        <label for="labelField">Label by:</label>
+        <select id="labelField">
+          <option value="tree_id">Tree ID</option>
+          <option value="species">Species</option>
+          <option value="dbh">DBH (cm)</option>
+          <option value="perimeter">Perimeter (cm)</option>
+          <option value="side">Side</option>
+          <option value="y">y-axis (m)</option>
+        </select>
+      </section>
+
+      <section>
+        <h3>3. Boundary buffer</h3>
+        <label for="bufferRange">Buffer: <span id="bufferVal">{{ default_buffer }}</span> m</label>
+        <input type="range" id="bufferRange" min="0" max="30" step="0.5" value="{{ default_buffer }}">
+      </section>
+
+      <section>
+        <h3>4. Export</h3>
+        <div class="row">
+          <button id="exportGpkg" class="btn primary">⬇ GeoPackage (.gpkg)</button>
+          <button id="exportGeoJson" class="btn">GeoJSON</button>
+        </div>
+        <button id="exportCsv" class="btn ghost" style="width:100%;margin-top:6px;">⬇ Clean CSV</button>
+        <p class="hint" id="infoText">Load a source to begin.</p>
+      </section>
+    </aside>
+
+    <!-- RIGHT: map -->
+    <div id="map"></div>
+  </main>
+
+  <!-- summary bar -->
+  <div id="summaryBar" class="summary hidden">
+    <span><strong id="stTotal">0</strong> total</span>
+    <span><strong id="stClean">0</strong> clean</span>
+    <span><strong id="stAnom">0</strong> anomalies</span>
+    <span><strong id="stDerived">0</strong> dbh from perimeter</span>
+    <span id="stCrs" class="muted"></span>
+  </div>
+
+  <script src="{% static 'field_etl/leaflet/leaflet.js' %}"></script>
+  <script src="{% static 'field_etl/js/app.js' %}"></script>
+</body>
+</html>

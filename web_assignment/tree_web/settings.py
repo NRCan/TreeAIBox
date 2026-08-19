@@ -12,6 +12,7 @@ ALLOWED_HOSTS = ['*']
 INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'matcher',
+    'field_etl',
 ]
 
 MIDDLEWARE = [
