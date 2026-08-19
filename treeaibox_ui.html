@@ -872,6 +872,10 @@ input[type="range"]::-webkit-slider-thumb {
         <input type="checkbox" id="use-gpu" checked>
         <label for="use-gpu">Use GPU (CUDA)</label>
       </div>
+      <div class="gpu-option" style="margin-left: 20px;">
+        <button id="select-file-btn" style="padding: 5px 10px; font-size: 12px;">📁 Select Point Cloud</button>
+        <span id="selected-file-name" style="margin-left: 10px; font-size: 12px; color: #666;"></span>
+      </div>
     </div>
 
     <!-- Tabs -->
@@ -1578,6 +1582,7 @@ input[type="range"]::-webkit-slider-thumb {
             // Initialize UI
             initializeTabs();
             initializeGPUOption();
+            initializeFileSelector();
             initializeButtons();
             initializeTreeisoNet();
             initializeCopyButtons();
@@ -1638,6 +1643,25 @@ input[type="range"]::-webkit-slider-thumb {
                 showNotification("GPU (CUDA) is not available. Using CPU instead.", "info");
             }
         });
+    }
+
+    // Initialize file selector button
+    function initializeFileSelector() {
+        const selectFileBtn = document.getElementById('select-file-btn');
+        const selectedFileName = document.getElementById('selected-file-name');
+        
+        if (selectFileBtn) {
+            selectFileBtn.addEventListener('click', function() {
+                backend.selectPointCloudFile().then(filePath => {
+                    if (filePath) {
+                        // Extract just the filename from the full path
+                        const fileName = filePath.split(/[\\/]/).pop();
+                        selectedFileName.textContent = fileName;
+                        selectedFileName.title = filePath; // Show full path on hover
+                    }
+                });
+            });
+        }
     }
 
     // Initialize button click events

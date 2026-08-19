@@ -1,0 +1,5 @@
+node_modules/
+modules/
+**/__pycache__/
+scripts/analysis_log/
+scripts/error_logs/
