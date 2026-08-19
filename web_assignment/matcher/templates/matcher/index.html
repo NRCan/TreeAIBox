@@ -15,7 +15,7 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
     <!-- App Stylesheet -->
-    <link rel="stylesheet" href="/static/matcher/css/style.css?v=20260817b">
+    <link rel="stylesheet" href="/static/matcher/css/style.css?v=20260818d">
 </head>
 <body class="dark-theme">
     <!-- Main Top Navigation -->
@@ -536,6 +536,127 @@
                         </tbody>
                     </table>
                 </div>
+
+                <!-- Column Definitions & Evaluation Metrics Reference Guide -->
+                <div class="batch-guide-section">
+                    <div class="batch-guide-header">
+                        <div class="batch-guide-title">
+                            <i class="fa-solid fa-book-bookmark"></i>
+                            <h3>Batch Comparison Column Definitions &amp; Evaluation Metrics Guide</h3>
+                        </div>
+                        <span class="batch-guide-subtitle">Reference glossary and mathematical formulations for benchmark interpretation</span>
+                    </div>
+
+                    <div class="batch-guide-grid">
+                        <!-- Column 1: LiDAR CSV File -->
+                        <div class="batch-guide-card">
+                            <div class="batch-guide-card-head">
+                                <div class="col-badge col-badge-blue"><i class="fa-solid fa-file-csv"></i> Column 1</div>
+                                <h4>LiDAR CSV File</h4>
+                            </div>
+                            <p class="batch-guide-desc">The source filename or parameter variation of the LiDAR trunk metrics dataset evaluated in this batch benchmark run.</p>
+                            <div class="batch-guide-meta">
+                                <span class="guide-meta-label">Format:</span> <code>CSV File Path / Name</code>
+                            </div>
+                        </div>
+
+                        <!-- Column 2: Total LiDAR Trees -->
+                        <div class="batch-guide-card">
+                            <div class="batch-guide-card-head">
+                                <div class="col-badge col-badge-cyan"><i class="fa-solid fa-tree"></i> Column 2</div>
+                                <h4>Total LiDAR Trees</h4>
+                            </div>
+                            <p class="batch-guide-desc">Total count of detected LiDAR tree stems evaluated. When the boundary filter is enabled, only detections inside the field survey convex hull are included.</p>
+                            <div class="batch-guide-meta">
+                                <span class="guide-meta-label">Metric:</span> <code>N<sub>LiDAR</sub> (in boundary)</code>
+                            </div>
+                        </div>
+
+                        <!-- Column 3: Matched Pairs -->
+                        <div class="batch-guide-card">
+                            <div class="batch-guide-card-head">
+                                <div class="col-badge col-badge-green"><i class="fa-solid fa-link"></i> Column 3</div>
+                                <h4>Matched Pairs</h4>
+                            </div>
+                            <p class="batch-guide-desc">Total count of optimal 1-to-1 pairs established between LiDAR detections and ground-truth field trees by the Hungarian assignment solver.</p>
+                            <div class="batch-guide-meta">
+                                <span class="guide-meta-label">Target:</span> <span class="meta-tag tag-green">Higher is better</span>
+                            </div>
+                        </div>
+
+                        <!-- Column 4: LiDAR Match % -->
+                        <div class="batch-guide-card">
+                            <div class="batch-guide-card-head">
+                                <div class="col-badge col-badge-emerald"><i class="fa-solid fa-bullseye"></i> Column 4</div>
+                                <h4>LiDAR Match % (Precision)</h4>
+                            </div>
+                            <p class="batch-guide-desc">Proportion of extracted LiDAR trees successfully matched to ground-truth trees. Lower percentages reflect commission error and over-segmentation.</p>
+                            <div class="batch-guide-meta">
+                                <span class="guide-meta-label">Formula:</span> <code>(Matched &divide; Total LiDAR) &times; 100%</code>
+                            </div>
+                        </div>
+
+                        <!-- Column 5: Field Match % -->
+                        <div class="batch-guide-card">
+                            <div class="batch-guide-card-head">
+                                <div class="col-badge col-badge-amber"><i class="fa-solid fa-check-double"></i> Column 5</div>
+                                <h4>Field Match % (Recall / Recovery)</h4>
+                            </div>
+                            <p class="batch-guide-desc">Percentage of surveyed field trees successfully identified by the LiDAR algorithm. Lower percentages reflect omission error and undetected trees.</p>
+                            <div class="batch-guide-meta">
+                                <span class="guide-meta-label">Formula:</span> <code>(Matched &divide; Total Field) &times; 100%</code>
+                            </div>
+                        </div>
+
+                        <!-- Column 6: Mean Dist Error -->
+                        <div class="batch-guide-card">
+                            <div class="batch-guide-card-head">
+                                <div class="col-badge col-badge-purple"><i class="fa-solid fa-ruler-combined"></i> Column 6</div>
+                                <h4>Mean Dist Error (m)</h4>
+                            </div>
+                            <p class="batch-guide-desc">Average Euclidean spatial distance offset between matched LiDAR tree centroids and ground-truth field GPS tree coordinates.</p>
+                            <div class="batch-guide-meta">
+                                <span class="guide-meta-label">Formula:</span> <code>&macr;d = 1/N &sum; &parallel;P<sub>LiDAR</sub> - P<sub>Field</sub>&parallel;</code>
+                            </div>
+                        </div>
+
+                        <!-- Column 7: DBH MAE -->
+                        <div class="batch-guide-card">
+                            <div class="batch-guide-card-head">
+                                <div class="col-badge col-badge-indigo"><i class="fa-solid fa-circle-dot"></i> Column 7</div>
+                                <h4>DBH MAE (cm)</h4>
+                            </div>
+                            <p class="batch-guide-desc">Mean Absolute Error between LiDAR cylinder-fitted DBH and field-measured DBH across all matched pairs.</p>
+                            <div class="batch-guide-meta">
+                                <span class="guide-meta-label">Formula:</span> <code>MAE = 1/N &sum; |DBH<sub>LiDAR</sub> - DBH<sub>Field</sub>|</code>
+                            </div>
+                        </div>
+
+                        <!-- Column 8: DBH Corr (r) -->
+                        <div class="batch-guide-card">
+                            <div class="batch-guide-card-head">
+                                <div class="col-badge col-badge-rose"><i class="fa-solid fa-chart-line"></i> Column 8</div>
+                                <h4>DBH Corr (r)</h4>
+                            </div>
+                            <p class="batch-guide-desc">Pearson correlation coefficient assessing linear agreement between LiDAR-derived DBH and field DBH (ranges from -1.0 to +1.0).</p>
+                            <div class="batch-guide-meta">
+                                <span class="guide-meta-label">Benchmark:</span> <span class="meta-tag tag-cyan">r &ge; 0.85 (Strong)</span>
+                            </div>
+                        </div>
+
+                        <!-- Column 9: Action -->
+                        <div class="batch-guide-card">
+                            <div class="batch-guide-card-head">
+                                <div class="col-badge col-badge-sky"><i class="fa-solid fa-arrow-pointer"></i> Column 9</div>
+                                <h4>Action (View Results)</h4>
+                            </div>
+                            <p class="batch-guide-desc">Clicking loads this dataset across all studio tabs: GIS Map Studio, Inventory Table, Analytics Matrix, and Executive PDF Audit Report.</p>
+                            <div class="batch-guide-meta">
+                                <span class="guide-meta-label">Interaction:</span> <code>Switches active run &amp; focuses Map</code>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- Tab 6: Executive Audit Report & PDF Document -->
@@ -805,10 +926,6 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
-<<<<<<< HEAD
-    <script src="/static/matcher/js/app.js?v=20260817b"></script>
-=======
-    <script src="/static/matcher/js/app.js?v=20260814n"></script>
->>>>>>> d3b3605f046959666ba6f86bd199a988bcfb1efd
+    <script src="/static/matcher/js/app.js?v=20260818g"></script>
 </body>
 </html>

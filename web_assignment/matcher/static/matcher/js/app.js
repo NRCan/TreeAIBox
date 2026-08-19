@@ -118,10 +118,11 @@ function renderBoundaryPreview(geojson) {
             fill: true,
             fillColor: '#fef08a',
             fillOpacity: 0.06,
-            dashArray: '6 4'
+            dashArray: '6 4',
+            interactive: false
         });
-        polygon.bindTooltip(p.label || 'Field Boundary', { sticky: true });
         layerGroupBoundary.addLayer(polygon);
+        if (polygon.bringToBack) polygon.bringToBack();
     });
 }
 
@@ -269,11 +270,11 @@ function initMap() {
     };
     L.control.layers(baseMaps, null, { position: 'topright' }).addTo(map);
 
-    // Layer groups for features
-    layerGroupLines = L.layerGroup().addTo(map);
-    layerGroupLidar = L.layerGroup().addTo(map);
-    layerGroupField = L.layerGroup().addTo(map);
+    // Layer groups for features (boundary at bottom, then lines and points on top)
     layerGroupBoundary = L.layerGroup().addTo(map);
+    layerGroupLines = L.layerGroup().addTo(map);
+    layerGroupField = L.layerGroup().addTo(map);
+    layerGroupLidar = L.layerGroup().addTo(map);
 
     // NOTE: reportMap is intentionally NOT initialized here.
     // It is initialized lazily by ensureReportMap() when the tab is first visible,
@@ -1297,13 +1298,11 @@ function renderMapFeatures(geojson, preserveView = false) {
                 fill: true,
                 fillColor: '#fef08a',
                 fillOpacity: 0.06,
-                dashArray: '6 4'
+                dashArray: '6 4',
+                interactive: false
             });
-            polygon.bindTooltip(
-                `Field Survey Boundary | ${p.lidar_raw} raw → ${p.lidar_after_clip} clipped LiDAR (removed: ${p.lidar_clipped_out})`,
-                { sticky: true }
-            );
             layerGroupBoundary.addLayer(polygon);
+            if (polygon.bringToBack) polygon.bringToBack();
         }
     });
 

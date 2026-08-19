@@ -101,10 +101,15 @@ def read_field_points_csv(path, derive_dbh=True, anchor_begin=DEFAULT_ANCHOR_BEG
         a = np.array(a0, float); b = np.array(b0, float)
         d = b - a; L = float(np.hypot(*d))
         if L <= 0: raise ValueError("Begin/End anchors coincide; cannot reconstruct positions.")
-        ux, uy = d / L; px, py = -uy, ux
+        ux, uy = d / L
+        # Normal vector pointing LEFT (-uy, ux) and RIGHT (uy, -ux)
+        # When facing from begin (A) to end (B):
+        # Left is rotated 90° CCW (-uy, ux); Right is rotated 90° CW (uy, -ux)
+        px_left, py_left = -uy, ux
         def rec(y_m, side, x_m):
-            off = x_m if side and str(side).strip().lower() in ("right","r") else -x_m
-            return a[0] + ux*y_m + px*off, a[1] + uy*y_m + py*off
+            is_left = not (side and str(side).strip().lower() in ("right", "r"))
+            sign = 1.0 if is_left else -1.0
+            return a[0] + ux * y_m + px_left * (sign * x_m), a[1] + uy * y_m + py_left * (sign * x_m)
         reconstruct = rec
 
     records = []

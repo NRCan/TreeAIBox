@@ -2,90 +2,300 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TreeToolBox — Step 1: Field Point ETL</title>
-  <link rel="stylesheet" href="{% static 'field_etl/leaflet/leaflet.css' %}">
-  <link rel="stylesheet" href="{% static 'field_etl/css/style.css' %}">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TreeToolBox — Field Point ETL Studio</title>
+    
+    <!-- Google Fonts & Icons -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+    
+    <!-- Leaflet GIS Map CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+    <!-- App Stylesheet -->
+    <link rel="stylesheet" href="{% static 'field_etl/css/style.css' %}?v=20260818f">
 </head>
-<body>
-  <header class="etl-header">
-    <div>
-      <h1>Step 1 · Field Point ETL <span class="badge">Cleaning → Export</span></h1>
-      <p class="sub">Clean source survey points (DBH from perimeter, anomaly flags) and export clean points, transect line &amp; boundary polygon.</p>
-    </div>
-    <nav class="header-nav">
-      <a href="/" class="btn ghost">← Field Matcher (Step 2)</a>
-    </nav>
-  </header>
-
-  <main class="etl-main">
-    <!-- LEFT: control panel -->
-    <aside class="panel">
-      <section>
-        <h3>1. Source data</h3>
-        <label for="srcPath">Source: vector (.gdb/.shp/.gpkg) or CSV</label>
-        <input id="srcPath" type="text" value="{{ default_source }}" placeholder="path to .gdb, .shp, .gpkg or .geojson">
-        <div class="row">
-          <button id="scanBtn" class="btn">Scan layers</button>
-          <button id="pickBtn" class="btn ghost">Browse…</button>
+<body class="dark-theme">
+    <!-- Main Top Navigation -->
+    <header class="app-header">
+        <div class="header-left">
+            <div>
+                <h1 class="app-title">TreeToolBox <span>Field ETL Studio</span></h1>
+                <p class="app-subtitle">Step 1 &bull; Source Survey Cleaning, Anomaly Flagging &amp; GIS Multi-Layer Export</p>
+            </div>
         </div>
-        <label for="layerSel">Layer <span class="muted" style="color:#8b98a5">(CSV = single)</span></label>
-        <select id="layerSel"><option value="">— select / auto —</option></select>
-        <label class="chk"><input type="checkbox" id="deriveDbh" checked> Derive DBH from perimeter (÷&nbsp;π)</label>
-        <button id="loadBtn" class="btn primary">Process &amp; map</button>
-      </section>
-
-      <section>
-        <h3>2. Layer manager</h3>
-        <label class="chk"><input type="checkbox" checked data-layer="points"> Field points (clean)</label>
-        <label class="chk"><input type="checkbox" checked data-layer="flagged"> Flagged anomalies</label>
-        <label class="chk"><input type="checkbox" checked data-layer="line"> Transect line</label>
-        <label class="chk"><input type="checkbox" checked data-layer="boundary"> Boundary polygon</label>
-        <div class="sep"></div>
-        <label class="chk"><input type="checkbox" id="showLabels"> Show labels</label>
-        <label for="labelField">Label by:</label>
-        <select id="labelField">
-          <option value="tree_id">Tree ID</option>
-          <option value="species">Species</option>
-          <option value="dbh">DBH (cm)</option>
-          <option value="perimeter">Perimeter (cm)</option>
-          <option value="side">Side</option>
-          <option value="y">y-axis (m)</option>
-        </select>
-      </section>
-
-      <section>
-        <h3>3. Boundary buffer</h3>
-        <label for="bufferRange">Buffer: <span id="bufferVal">{{ default_buffer }}</span> m</label>
-        <input type="range" id="bufferRange" min="0" max="30" step="0.5" value="{{ default_buffer }}">
-      </section>
-
-      <section>
-        <h3>4. Export</h3>
-        <div class="row">
-          <button id="exportGpkg" class="btn primary">⬇ GeoPackage (.gpkg)</button>
-          <button id="exportGeoJson" class="btn">GeoJSON</button>
+        <div class="header-right">
+            <span class="status-badge" id="backendStatus"><i class="fa-solid fa-circle-check"></i> Django Engine Active</span>
+            <a href="/" class="status-badge" style="text-decoration:none;background:rgba(56,189,248,0.15);border-color:rgba(56,189,248,0.35);color:#38bdf8;">
+                <i class="fa-solid fa-arrow-right"></i> Step 2: Field Matcher
+            </a>
+            <a href="https://github.com" target="_blank" class="icon-link"><i class="fa-brands fa-github"></i></a>
         </div>
-        <button id="exportCsv" class="btn ghost" style="width:100%;margin-top:6px;">⬇ Clean CSV</button>
-        <p class="hint" id="infoText">Load a source to begin.</p>
-      </section>
-    </aside>
+    </header>
 
-    <!-- RIGHT: map -->
-    <div id="map"></div>
-  </main>
+    <!-- Main Workspace Container -->
+    <main class="workspace-container">
+        <!-- LEFT SIDEBAR: Controls & Parameters -->
+        <aside class="control-sidebar">
+            <div class="sidebar-scroll">
+                
+                <!-- Section 1: Source Data -->
+                <div class="panel-card">
+                    <div class="card-header">
+                        <i class="fa-solid fa-folder-tree card-icon"></i>
+                        <h2>1. Source Data Input</h2>
+                    </div>
 
-  <!-- summary bar -->
-  <div id="summaryBar" class="summary hidden">
-    <span><strong id="stTotal">0</strong> total</span>
-    <span><strong id="stClean">0</strong> clean</span>
-    <span><strong id="stAnom">0</strong> anomalies</span>
-    <span><strong id="stDerived">0</strong> dbh from perimeter</span>
-    <span id="stCrs" class="muted"></span>
-  </div>
+                    <div class="form-group">
+                        <label for="srcPath">Source File (.gdb / .shp / .gpkg / .csv):</label>
+                        <div class="input-with-btn">
+                            <input type="text" id="srcPath" value="{{ default_source }}" placeholder="Path to .gdb, .shp, .gpkg or .csv...">
+                            <button type="button" class="btn-sm" id="pickBtn" title="Browse for file">
+                                <i class="fa-solid fa-folder-open"></i> Browse
+                            </button>
+                            <button type="button" class="btn-sm" id="scanBtn" title="Scan & detect layers">
+                                <i class="fa-solid fa-magnifying-glass"></i> Scan
+                            </button>
+                        </div>
+                    </div>
 
-  <script src="{% static 'field_etl/leaflet/leaflet.js' %}"></script>
-  <script src="{% static 'field_etl/js/app.js' %}"></script>
+                    <div class="form-group">
+                        <label for="layerSel">Vector Layer (Auto for CSV):</label>
+                        <select id="layerSel">
+                            <option value="">— Select / Auto detect —</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group" style="margin-top: 4px;">
+                        <label class="toggle-pill">
+                            <input type="checkbox" id="deriveDbh" checked>
+                            <span><i class="fa-solid fa-calculator"></i> Derive DBH from perimeter (&divide; &pi;)</span>
+                        </label>
+                    </div>
+
+                    <button type="button" class="btn-primary" id="loadBtn" style="margin-top: 6px;">
+                        <i class="fa-solid fa-wand-magic-sparkles"></i> Process &amp; Clean Points
+                    </button>
+                    <p class="field-hint" id="infoText">Select a source file and click Process to inspect.</p>
+                </div>
+
+                <!-- Section 2: Layer & Label Controls -->
+                <div class="panel-card">
+                    <div class="card-header">
+                        <i class="fa-solid fa-layer-group card-icon"></i>
+                        <h2>2. Layer &amp; Display Controls</h2>
+                    </div>
+
+                    <div class="layer-toggles-list">
+                        <label class="toggle-pill">
+                            <input type="checkbox" checked data-layer="points">
+                            <span class="green-dot"></span>
+                            <span>Clean Field Points</span>
+                            <span class="badge-mini" id="badgeCleanCount">0</span>
+                        </label>
+                        <label class="toggle-pill">
+                            <input type="checkbox" checked data-layer="flagged">
+                            <span class="red-dot"></span>
+                            <span>Flagged Anomalies</span>
+                            <span class="badge-mini badge-warn" id="badgeAnomCount">0</span>
+                        </label>
+                        <label class="toggle-pill">
+                            <input type="checkbox" checked data-layer="line">
+                            <span class="dash-line-dot"></span>
+                            <span>Transect Line</span>
+                        </label>
+                        <label class="toggle-pill">
+                            <input type="checkbox" checked data-layer="boundary">
+                            <span class="purple-dot"></span>
+                            <span>Boundary Polygon</span>
+                        </label>
+                    </div>
+
+                    <div class="divider-line"></div>
+
+                    <div class="form-row">
+                        <div class="form-group col-6">
+                            <label class="toggle-pill" style="margin-top: 8px;">
+                                <input type="checkbox" id="showLabels">
+                                <span><i class="fa-solid fa-tag"></i> Labels</span>
+                            </label>
+                        </div>
+                        <div class="form-group col-6">
+                            <label for="labelField">Field to Show:</label>
+                            <select id="labelField">
+                                <option value="tree_id">Tree ID</option>
+                                <option value="species">Species</option>
+                                <option value="dbh">DBH (cm)</option>
+                                <option value="perimeter">Perimeter (cm)</option>
+                                <option value="side">Side</option>
+                                <option value="y">y-axis (m)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section 3: Boundary Buffer -->
+                <div class="panel-card">
+                    <div class="card-header">
+                        <i class="fa-solid fa-draw-polygon card-icon"></i>
+                        <h2>3. Survey Boundary Buffer</h2>
+                    </div>
+
+                    <div class="slider-group">
+                        <div class="slider-header">
+                            <span>Buffer Distance:</span>
+                            <span class="weight-pct" id="bufferVal">{{ default_buffer }} m</span>
+                        </div>
+                        <input type="range" id="bufferRange" min="0" max="30" step="0.5" value="{{ default_buffer }}">
+                    </div>
+                    <p class="field-hint">Dynamically expands the convex hull boundary polygon surrounding surveyed field points.</p>
+                </div>
+
+                <!-- Section 4: Export Deliverables -->
+                <div class="panel-card">
+                    <div class="card-header">
+                        <i class="fa-solid fa-file-export card-icon"></i>
+                        <h2>4. Export Clean Deliverables</h2>
+                    </div>
+
+                    <div class="export-btn-grid">
+                        <button type="button" class="btn-sm btn-export-primary" id="exportGpkg">
+                            <i class="fa-solid fa-download"></i> GeoPackage (.gpkg)
+                        </button>
+                        <button type="button" class="btn-sm btn-outline" id="exportGeoJson">
+                            <i class="fa-solid fa-code"></i> GeoJSON
+                        </button>
+                    </div>
+                    <button type="button" class="btn-sm btn-outline" id="exportCsv" style="width:100%;margin-top:6px;">
+                        <i class="fa-solid fa-file-csv"></i> Cleaned Field CSV
+                    </button>
+                </div>
+
+                <!-- Section 5: Selected Tree Inspector -->
+                <div class="panel-card" id="treeInspectorCard">
+                    <div class="card-header" style="justify-content: space-between;">
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <i class="fa-solid fa-crosshairs card-icon" style="color:var(--accent-cyan);"></i>
+                            <h2>5. Selected Tree Inspector</h2>
+                        </div>
+                        <span class="badge-mini" id="inspectorTreeBadge" style="display: none;">#0</span>
+                    </div>
+                    <div id="inspectorContent">
+                        <div class="empty-layers-notice">
+                            <i class="fa-solid fa-arrow-pointer"></i> Click any tree point on the GIS map to inspect its survey metrics, coordinates &amp; validation status.
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Section 6: Data Quality & Anomaly Inspector -->
+                <div class="panel-card" id="anomalyInspectorCard" style="display: none;">
+                    <div class="card-header" style="justify-content: space-between;">
+                        <div style="display:flex;align-items:center;gap:8px;">
+                            <i class="fa-solid fa-triangle-exclamation card-icon" style="color:#ef4444;"></i>
+                            <h2>Flagged Quality Issues (<span id="anomListCount">0</span>)</h2>
+                        </div>
+                    </div>
+                    <div class="table-wrapper-mini" id="anomTableWrap">
+                        <!-- Populated dynamically -->
+                    </div>
+                </div>
+
+            </div>
+        </aside>
+
+        <!-- RIGHT MAIN AREA: Map Studio & Summary KPI Bar -->
+        <section class="main-studio">
+            
+            <!-- Map Top Toolbar -->
+            <div class="map-toolbar">
+                <div class="toolbar-left">
+                    <span class="toolbar-title"><i class="fa-solid fa-map-location-dot"></i> Field Point GIS Canvas</span>
+                    <span class="badge-status-pill" id="crsBadge"><i class="fa-solid fa-globe"></i> <span id="stCrs">CRS: --</span></span>
+                </div>
+                <div class="toolbar-right">
+                    <button class="btn-tool" id="btnToggleLegend"><i class="fa-solid fa-list"></i> Toggle Legend</button>
+                    <button class="btn-tool" id="btnResetMapZoom" title="Fit to all trees"><i class="fa-solid fa-compress"></i> Fit Extents</button>
+                </div>
+            </div>
+
+            <!-- Map Relative Canvas -->
+            <div class="map-wrapper-relative">
+                <div id="map" class="gis-map-canvas"></div>
+
+                <!-- Floating Symbology Legend -->
+                <div class="map-floating-legend" id="mapLegend">
+                    <div class="legend-header">
+                        <span><i class="fa-solid fa-circle-info"></i> Symbology Legend</span>
+                        <button type="button" class="btn-close-legend" id="btnCloseLegend">&times;</button>
+                    </div>
+                    <div class="legend-items">
+                        <div class="legend-item">
+                            <span class="point-swatch swatch-green-point"></span>
+                            <div class="legend-desc">
+                                <div class="legend-title">Green Point</div>
+                                <div class="legend-sub"><strong>Left Side Field Tree</strong>: Clean surveyed tree.</div>
+                            </div>
+                        </div>
+                        <div class="legend-item">
+                            <span class="point-swatch swatch-blue-point"></span>
+                            <div class="legend-desc">
+                                <div class="legend-title">Navy Blue Point</div>
+                                <div class="legend-sub"><strong>Right Side Field Tree</strong>: Clean surveyed tree.</div>
+                            </div>
+                        </div>
+                        <div class="legend-item">
+                            <span class="point-swatch swatch-red-point"></span>
+                            <div class="legend-desc">
+                                <div class="legend-title">Red Point (Flagged)</div>
+                                <div class="legend-sub"><strong>Anomaly / Outlier</strong>: Missing DBH, duplicate ID, or value outlier.</div>
+                            </div>
+                        </div>
+                        <div class="legend-item">
+                            <span class="line-swatch swatch-red-dash"></span>
+                            <div class="legend-desc">
+                                <div class="legend-title">Red Dashed Line</div>
+                                <div class="legend-sub"><strong>Transect Baseline</strong>: Survey centerline anchor line.</div>
+                            </div>
+                        </div>
+                        <div class="legend-item">
+                            <span class="poly-swatch swatch-purple-poly"></span>
+                            <div class="legend-desc">
+                                <div class="legend-title">Purple Polygon</div>
+                                <div class="legend-sub"><strong>Buffered Boundary</strong>: Survey plot convex hull footprint.</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Bottom KPI Summary Strip -->
+            <div id="summaryBar" class="etl-summary-strip hidden">
+                <div class="etl-kpi-chip chip-total">
+                    <span class="kpi-chip-label">TOTAL TREES</span>
+                    <span class="kpi-chip-val" id="stTotal">0</span>
+                </div>
+                <div class="etl-kpi-chip chip-clean">
+                    <span class="kpi-chip-label">CLEAN TREES</span>
+                    <span class="kpi-chip-val" id="stClean">0</span>
+                </div>
+                <div class="etl-kpi-chip chip-anom">
+                    <span class="kpi-chip-label">ANOMALIES</span>
+                    <span class="kpi-chip-val" id="stAnom">0</span>
+                </div>
+                <div class="etl-kpi-chip chip-derived">
+                    <span class="kpi-chip-label">DERIVED DBH (Perimeter / &pi;)</span>
+                    <span class="kpi-chip-val" id="stDerived">0</span>
+                </div>
+            </div>
+
+        </section>
+    </main>
+
+    <!-- Scripts -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="{% static 'field_etl/js/app.js' %}?v=20260818e"></script>
 </body>
 </html>
