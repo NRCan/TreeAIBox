@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import argparse
 import os
+from typing import List, Optional
 
 
 def generate_tree_stem_points(height: float = 5.0, base_radius: float = 0.3,
@@ -148,13 +149,12 @@ def main():
     save_points_to_csv(points, args.output)
 
     # Print statistics
-    print("
-Statistics:")
+    print("\nStatistics:")
     print(f"Total points: {len(points)}")
-    print(".3f")
-    print(".3f")
-    print(".3f")
-    print(".3f")
+    print(f"X range: {points[:, 0].min():.3f} to {points[:, 0].max():.3f} m")
+    print(f"Y range: {points[:, 1].min():.3f} to {points[:, 1].max():.3f} m")
+    print(f"Z range: {points[:, 2].min():.3f} to {points[:, 2].max():.3f} m")
+    print(f"Height: {points[:, 2].max() - points[:, 2].min():.3f} m")
 
 
 if __name__ == '__main__':

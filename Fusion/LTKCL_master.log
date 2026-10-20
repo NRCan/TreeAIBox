@@ -36551,3 +36551,21 @@ Problems with polygon overlay: D:/Enhanced Forest Inventory/Data/New DataStore/C
 Run finished: Mon Aug 10 10:52:27 2026 (elapsed time: 0 seconds)
 ***There were errors during the run
 Done
+**********
+PolyClipData v1.80 32-bit (FUSION v4.61) (Built on Sep  5 2024 15:17:02)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Clips point data using polygons stored in shapefiles
+**********
+PolyClipData v1.80 64-bit (FUSION v4.61) (Built on Sep  5 2024 15:16:57)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Clips point data using polygons stored in shapefiles
+**********
+PolyClipData v1.80 64-bit (FUSION v4.61) (Built on Sep  5 2024 15:16:57)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: c:\Users\w0491597\Documents\Projects\TreeAIBox\Fusion\PolyClipData64.exe /verbose /multifile /shape:2,* R:\AGRG\Project\2025_Lily_Lake_Road\Shapefiles\Plot_Buffer\FINAL_Plot_Buffer_11_28m.shp "D:\LLR DATA\Clipped_Plots\plot.las" "D:\LLR DATA\20250407_LLR_L2_normalized.las"
+Run started: Mon Oct 19 20:35:49 2026
+   D:\LLR DATA\20250407_LLR_L2_normalized.las: 71075337 points
+   Scanning D:\LLR DATA\20250407_LLR_L2_normalized.las...2511974 points out of 71075337 found in polygons
+   Creating output files for polygons 1 - 8 of 8...Done
+Run finished: Mon Oct 19 20:36:26 2026 (elapsed time: 37 seconds)
+Done

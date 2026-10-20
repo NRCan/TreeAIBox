@@ -14,7 +14,11 @@ def find_empty_files(root_dir):
     return empty_files
 
 if __name__ == "__main__":
-    workspace_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    candidate_roots = [
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    ]
+    workspace_root = next((r for r in candidate_roots if os.path.exists(os.path.join(r, "TreeAIBox.py"))), candidate_roots[0])
     empty_files = find_empty_files(workspace_root)
     if empty_files:
         print("Empty files found:")
