@@ -6,6 +6,12 @@ Allows loading LAS files, selecting tree IDs from 'itc' scalar field, and visual
 
 import sys
 import os
+
+# Ensure safe UTF-8 terminal I/O on Windows without charmap encoding crashes
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 import numpy as np
 import pandas as pd
 import laspy
@@ -1014,7 +1020,14 @@ class TreeVisualizerGUI(QMainWindow):
         formatted_msg = f"[{timestamp}] {message}"
         self.console.append(formatted_msg)
         # Also print to terminal for visibility
-        print(formatted_msg)
+        try:
+            print(formatted_msg)
+        except Exception:
+            try:
+                enc = sys.stdout.encoding or 'ascii'
+                print(formatted_msg.encode(enc, errors='replace').decode(enc))
+            except Exception:
+                pass
         # Auto-scroll to bottom
         scrollbar = self.console.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
@@ -1031,7 +1044,14 @@ class TreeVisualizerGUI(QMainWindow):
         timestamp = datetime.now().strftime("%H:%M:%S")
         block = "\n".join(f"[{timestamp}] {m}" for m in messages)
         self.console.append(block)
-        print(block)
+        try:
+            print(block)
+        except Exception:
+            try:
+                enc = sys.stdout.encoding or 'ascii'
+                print(block.encode(enc, errors='replace').decode(enc))
+            except Exception:
+                pass
         scrollbar = self.console.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 
@@ -1387,6 +1407,29 @@ class TreeVisualizerGUI(QMainWindow):
         self.load_button.setToolTip("Add single or multiple LAS/LAZ files to layer manager")
         self.load_button.clicked.connect(self.load_las_file)
         file_layout.addWidget(self.load_button)
+
+        self.import_ff3d_button = ModernButton("🌲 Import ForestFormer3D LAS")
+        self.import_ff3d_button.setStyleSheet("""
+            QPushButton {
+                background-color: #1b5e20;
+                border: 1px solid #4caf50;
+                color: white;
+                padding: 6px 12px;
+                text-align: center;
+                font-size: 11px;
+                font-weight: bold;
+                border-radius: 4px;
+            }
+            QPushButton:hover {
+                background-color: #2e7d32;
+            }
+            QPushButton:pressed {
+                background-color: #1b5e20;
+            }
+        """)
+        self.import_ff3d_button.setToolTip("Import segmented LAS outputs from ForestFormer3D (auto-maps itc and stemcls)")
+        self.import_ff3d_button.clicked.connect(self.import_forestformer3d_output)
+        file_layout.addWidget(self.import_ff3d_button)
 
         # ── LAS Layer Manager Widget ──
         self.las_layer_group = QGroupBox("LAS Layer Manager")
@@ -2127,6 +2170,30 @@ class TreeVisualizerGUI(QMainWindow):
             # Activate the last added layer
             self.activate_las_layer(added_paths[-1])
 
+    def import_forestformer3d_output(self):
+        """Browse and import ForestFormer3D segmented LAS outputs."""
+        default_dir = r"D:\LLR DATA\ff3d_output"
+        if not os.path.isdir(default_dir):
+            default_dir = os.path.dirname(self.current_las_path) if self.current_las_path else ""
+
+        file_paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Select ForestFormer3D Segmented LAS File(s)",
+            default_dir,
+            "LAS files (*.las *.laz);;All Files (*.*)"
+        )
+        if not file_paths:
+            return
+
+        added_paths = []
+        for path in file_paths:
+            rec = self._add_las_to_layers(path)
+            if rec:
+                added_paths.append(path)
+
+        if added_paths:
+            self.activate_las_layer(added_paths[-1], silent=False, auto_visualize=True)
+
     def _add_las_to_layers(self, file_path):
         """Register a LAS file in self.las_layers if not already present."""
         norm_path = os.path.normpath(file_path)
@@ -2138,11 +2205,14 @@ class TreeVisualizerGUI(QMainWindow):
             import laspy
             data = laspy.read(file_path)
             num_points = len(data.points)
-            has_stemcls = 'stemcls' in data.point_format.dimension_names
+            has_stemcls = ('stemcls' in data.point_format.dimension_names) or ('semantic_pred' in data.point_format.dimension_names)
             num_trees = 0
             if 'itc' in data.point_format.dimension_names:
                 itc_vals = np.array(data['itc'])
                 num_trees = len(np.unique(itc_vals[itc_vals > 0]))
+            elif 'tree_id' in data.point_format.dimension_names:
+                t_vals = np.array(data['tree_id'])
+                num_trees = len(np.unique(t_vals[t_vals >= 0]))
 
             layer_rec = {
                 'path': norm_path,
@@ -2231,7 +2301,7 @@ class TreeVisualizerGUI(QMainWindow):
         if hasattr(self, 'toggle_las_batch_btn'):
             self.toggle_las_batch_btn.setText("Uncheck All" if new_state else "Check All")
 
-    def activate_las_layer(self, file_path, silent=False):
+    def activate_las_layer(self, file_path, silent=False, auto_visualize=False):
         """Switch active LAS file, load data into memory, and update UI."""
         norm_path = os.path.normpath(file_path)
         # Ensure file is in layers list
@@ -2245,6 +2315,15 @@ class TreeVisualizerGUI(QMainWindow):
 
         self.load_las_data(file_path, silent=silent)
         self._update_las_layer_list_widget()
+
+        if auto_visualize and self.las_data is not None and hasattr(self, 'unique_itc_values'):
+            if len(self.unique_itc_values) > 0:
+                print(f"[LOAD] Auto-selecting and visualizing {len(self.unique_itc_values)} trees...")
+                if len(self.unique_itc_values) <= 300:
+                    self.select_all_trees()
+                elif self.tree_list.count() > 0:
+                    self.tree_list.item(0).setSelected(True)
+                self.visualize_tree()
 
     def load_las_data(self, file_path, silent=False):
         """Load LAS file and extract ITC values."""
@@ -2279,6 +2358,22 @@ class TreeVisualizerGUI(QMainWindow):
             except Exception:
                 self.current_las_path = None
 
+            # Check for ITC field or synthesize from alternative fields
+            if 'itc' not in self.las_data.point_format.dimension_names:
+                for alt_name in ['tree_id', 'treeID', 'TreeID', 'instance_id']:
+                    if alt_name in self.las_data.point_format.dimension_names:
+                        print(f"[LOAD] Mapping '{alt_name}' to 'itc' scalar field...")
+                        self.log_to_console(f"ℹ️ Found '{alt_name}'. Mapping to 'itc'...")
+                        try:
+                            raw_ids = np.array(self.las_data[alt_name])
+                            self.las_data.add_extra_dim(laspy.ExtraBytesParams(name='itc', type=np.int32))
+                            # TreeAIBox expects itc >= 1 for trees and 0 for unassigned/ground
+                            itc_synth = np.where(raw_ids >= 0, raw_ids + 1, 0).astype(np.int32)
+                            self.las_data['itc'] = itc_synth
+                            break
+                        except Exception as e:
+                            print(f"[LOAD] Error mapping {alt_name} to itc: {e}")
+
             # Check for ITC field
             if 'itc' not in self.las_data.point_format.dimension_names:
                 if not silent:
@@ -2286,6 +2381,30 @@ class TreeVisualizerGUI(QMainWindow):
                                       "No 'itc' scalar field found in the LAS file.")
                 self.las_data = None
                 return
+
+            # Check for stemcls field for trunk visualization or synthesize from semantic segmentation
+            if 'stemcls' not in self.las_data.point_format.dimension_names:
+                for alt_sem in ['semantic_pred', 'Classification', 'classification']:
+                    if alt_sem in self.las_data.point_format.dimension_names:
+                        print(f"[LOAD] Mapping '{alt_sem}' to 'stemcls' field...")
+                        try:
+                            sem_vals = np.array(self.las_data[alt_sem])
+                            self.las_data.add_extra_dim(laspy.ExtraBytesParams(name='stemcls', type=np.uint8))
+                            stem_synth = np.zeros(len(sem_vals), dtype=np.uint8)
+                            if alt_sem == 'semantic_pred':
+                                # ForestFormer3D classes: 1=wood/stem, 2=foliage, 0=ground
+                                # TreeAIBox: 2=wood/stem, 1=foliage, 0=ground
+                                stem_synth[sem_vals == 1] = 2
+                                stem_synth[sem_vals == 2] = 1
+                            else:
+                                # Standard LAS classification: 4=stem/trunk/med-veg, 5=foliage/high-veg
+                                stem_synth[sem_vals == 4] = 2
+                                stem_synth[sem_vals == 5] = 1
+                            self.las_data['stemcls'] = stem_synth
+                            self.log_to_console(f"ℹ️ Mapped '{alt_sem}' to 'stemcls'.")
+                            break
+                        except Exception as e:
+                            print(f"[LOAD] Error mapping {alt_sem} to stemcls: {e}")
 
             # Check for stemcls field for trunk visualization
             has_stemcls = 'stemcls' in self.las_data.point_format.dimension_names
@@ -11530,6 +11649,15 @@ def main():
     
     window.showMaximized()
     print(f"[STARTUP] {time.strftime('%H:%M:%S')} - Window shown ({time.perf_counter() - startup_start:.2f}s total)")
+
+    # Auto-load file passed via command line argument (e.g. from run_treeaibox_enhancer.bat or ForestFormer3D)
+    if len(sys.argv) > 1:
+        cli_arg = sys.argv[1].strip('"\'')
+        if os.path.isfile(cli_arg) and cli_arg.lower().endswith(('.las', '.laz')):
+            cli_abs = os.path.abspath(cli_arg)
+            print(f"[STARTUP] Auto-loading CLI file: {cli_abs}")
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(250, lambda: window.activate_las_layer(cli_abs, silent=True, auto_visualize=True))
 
     # Start event loop
     sys.exit(app.exec())

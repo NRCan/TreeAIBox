@@ -75,6 +75,36 @@ Automated post-processor that cleans false stumps (< 2.5m, < 120 pts), disentang
   .\.venv\Scripts\python.exe scripts\pointcloud_processing\refine_segmented_plots.py
   ```
 
+### 5. Side-by-Side 3D Plot Comparison GUI (`compare_segmentation_gui.py`)
+Synchronized 3D dual-viewport GUI to visually compare Original vs. Refined segmentations across all plots with linked camera rotation and metrics:
+- **Batch**: Double-click or run `run_compare_plots.bat`
+- **PowerShell**:
+  ```powershell
+  .\run_compare_plots.ps1
+  ```
+- Or run directly:
+  ```powershell
+  .\.venv\Scripts\python.exe scripts\visualization\compare_segmentation_gui.py
+  ```
+- Or open HTML Report:
+  Double-click `D:\LLR DATA\Clipped_Plots\Segmented_Results\Refined\visual_comparison_report.html`
+
+### 5. LAS to LAZ Converter (`las_to_laz.py`)
+Lossless compression of LAS files to LAZ (70%+ space savings) with multi-core batch processing and integrity checks:
+- **Batch**: Double-click or run `run_las_to_laz.bat`
+- **PowerShell**:
+  ```powershell
+  .\run_las_to_laz.ps1
+  ```
+- Or run directly (CLI / GUI):
+  ```powershell
+  # Launch Interactive GUI:
+  .\run_las_to_laz.ps1 --gui
+
+  # Convert folder with multi-core acceleration:
+  .\.venv\Scripts\python.exe scripts\pointcloud_processing\las_to_laz.py -i "D:\LLR DATA\Clipped_Plots" --cores 4
+  ```
+
 
 ---
 

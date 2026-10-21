@@ -36569,3 +36569,14 @@ Run started: Mon Oct 19 20:35:49 2026
    Creating output files for polygons 1 - 8 of 8...Done
 Run finished: Mon Oct 19 20:36:26 2026 (elapsed time: 37 seconds)
 Done
+**********
+PolyClipData v1.80 64-bit (FUSION v4.61) (Built on Sep  5 2024 15:16:57)
+ --Robert J. McGaughey--USDA Forest Service--Pacific Northwest Research Station
+Command line: c:\Users\w0491597\Documents\Projects\TreeAIBox\Fusion\PolyClipData64.exe /verbose R:\AGRG\Project\2026_NorthNova_Forestry\LAS\Las_processing\Shapefiles\AOI\Sugarloaf_AOI.shp "D:\NNF DATA\NNF_SugarLoaf_L3_20260826_Noramlized_normalized_clipped_AOI.las" "D:\NNF DATA\NNF_SugarLoaf_L3_20260826_Noramlized_normalized.las"
+Run started: Wed Oct 21 11:21:03 2026
+   D:\NNF DATA\NNF_SugarLoaf_L3_20260826_Noramlized_normalized.las: 630894283 points
+   Clipping D:\NNF DATA\NNF_SugarLoaf_L3_20260826_Noramlized_normalized.las...540800971 points out of 630894283 written to output file
+Clipped data file produced:
+   D:\NNF DATA\NNF_SugarLoaf_L3_20260826_Noramlized_normalized_clipped_AOI.las    Oct 21, 2026 @ 11:30 AM
+Run finished: Wed Oct 21 11:30:22 2026 (elapsed time: 559 seconds)
+Done
