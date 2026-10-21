@@ -2382,33 +2382,13 @@ class TreeVisualizerGUI(QMainWindow):
                 self.las_data = None
                 return
 
-            # Check for stemcls field for trunk visualization or synthesize from semantic segmentation
-            if 'stemcls' not in self.las_data.point_format.dimension_names:
-                for alt_sem in ['semantic_pred', 'Classification', 'classification']:
-                    if alt_sem in self.las_data.point_format.dimension_names:
-                        print(f"[LOAD] Mapping '{alt_sem}' to 'stemcls' field...")
-                        try:
-                            sem_vals = np.array(self.las_data[alt_sem])
-                            self.las_data.add_extra_dim(laspy.ExtraBytesParams(name='stemcls', type=np.uint8))
-                            stem_synth = np.zeros(len(sem_vals), dtype=np.uint8)
-                            if alt_sem == 'semantic_pred':
-                                # ForestFormer3D classes: 1=wood/stem, 2=foliage, 0=ground
-                                # TreeAIBox: 2=wood/stem, 1=foliage, 0=ground
-                                stem_synth[sem_vals == 1] = 2
-                                stem_synth[sem_vals == 2] = 1
-                            else:
-                                # Standard LAS classification: 4=stem/trunk/med-veg, 5=foliage/high-veg
-                                stem_synth[sem_vals == 4] = 2
-                                stem_synth[sem_vals == 5] = 1
-                            self.las_data['stemcls'] = stem_synth
-                            self.log_to_console(f"ℹ️ Mapped '{alt_sem}' to 'stemcls'.")
-                            break
-                        except Exception as e:
-                            print(f"[LOAD] Error mapping {alt_sem} to stemcls: {e}")
-
-            # Check for stemcls field for trunk visualization
+            # Check for wood/trunk classification fields:
+            # - 'semantic_pred' (ForestFormer3D: 1=Wood, 2=Foliage, 0=Ground)
+            # - 'stemcls' (TreeAIBox stem classifier: 2=Wood, 1=Foliage, 0=Ground)
             has_stemcls = 'stemcls' in self.las_data.point_format.dimension_names
-            print(f"[LOAD] {time.strftime('%H:%M:%S')} - Fields: itc=True, stemcls={has_stemcls}")
+            has_semantic = 'semantic_pred' in self.las_data.point_format.dimension_names
+            has_stem_info = has_stemcls or has_semantic
+            print(f"[LOAD] {time.strftime('%H:%M:%S')} - Fields: itc=True, semantic_pred={has_semantic}, stemcls={has_stemcls}")
 
             # Extract unique ITC values
             itc_start = time.perf_counter()
@@ -2417,45 +2397,48 @@ class TreeVisualizerGUI(QMainWindow):
             self.unique_itc_values = np.unique(itc_values[itc_values > 0]).astype(int)  # Exclude 0 (likely unassigned) and convert to int
             print(f"[LOAD] {time.strftime('%H:%M:%S')} - Found {len(self.unique_itc_values)} unique ITC values ({time.perf_counter() - itc_start:.3f}s)")
 
-            # Filter tree IDs by stemcls = 2 if stemcls field exists
-            # For large files (>50M points), ask user if they want to filter
-            perform_stemcls_filter = False
-            if has_stemcls:
+            # Filter tree IDs by wood/stem presence if semantic_pred or stemcls exists
+            perform_stem_filter = False
+            if has_stem_info:
                 LARGE_FILE_THRESHOLD = 50_000_000  # 50 million points
                 if num_points > LARGE_FILE_THRESHOLD and not silent:
                     reply = QMessageBox.question(
                         self,
                         "Large File Detected",
                         f"This file has {num_points:,} points ({len(self.unique_itc_values)} trees).\n\n"
-                        f"Filtering by stemcls=2 (stem points) may take a while.\n\n"
+                        f"Filtering by stem points may take a while.\n\n"
                         f"Do you want to filter trees by stem presence?\n"
                         f"• Yes = Show only trees with stem points (slower)\n"
                         f"• No = Show all trees (faster)",
                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                        QMessageBox.StandardButton.No  # Default to No for large files
+                        QMessageBox.StandardButton.No
                     )
-                    perform_stemcls_filter = (reply == QMessageBox.StandardButton.Yes)
-                    print(f"[LOAD] {time.strftime('%H:%M:%S')} - User chose {'to filter' if perform_stemcls_filter else 'to skip filtering'} for large file")
+                    perform_stem_filter = (reply == QMessageBox.StandardButton.Yes)
                 else:
-                    perform_stemcls_filter = True  # Always filter for smaller files
+                    perform_stem_filter = True
                     
-            if has_stemcls and perform_stemcls_filter:
+            if has_stem_info and perform_stem_filter:
                 filter_start = time.perf_counter()
-                print(f"[LOAD] {time.strftime('%H:%M:%S')} - Filtering by stemcls=2...")
-                self.log_to_console(f"⏳ Filtering {len(self.unique_itc_values)} trees by stem presence... (this may take a while)")
-                QApplication.processEvents()  # Update UI to show message
+                field_lbl = "semantic_pred=1" if has_semantic else "stemcls"
+                print(f"[LOAD] {time.strftime('%H:%M:%S')} - Filtering by {field_lbl}...")
+                self.log_to_console(f"⏳ Filtering {len(self.unique_itc_values)} trees by stem presence... ({field_lbl})")
+                QApplication.processEvents()
                 
-                stemcls_values = np.array(self.las_data['stemcls'])
                 filtered_ids = []
-                for tree_id in self.unique_itc_values:
-                    mask = (itc_values == tree_id) & (stemcls_values == 2)
-                    if np.any(mask):
-                        filtered_ids.append(tree_id)
+                if has_semantic:
+                    sem_vals = np.asarray(self.las_data['semantic_pred'])
+                    for tree_id in self.unique_itc_values:
+                        if np.any((itc_values == tree_id) & (sem_vals == 1)):
+                            filtered_ids.append(tree_id)
+                elif has_stemcls:
+                    stemcls_vals = np.asarray(self.las_data['stemcls'])
+                    for tree_id in self.unique_itc_values:
+                        if np.any((itc_values == tree_id) & (stemcls_vals != 1)):
+                            filtered_ids.append(tree_id)
                 self.unique_itc_values = np.array(filtered_ids)
                 print(f"[LOAD] {time.strftime('%H:%M:%S')} - Filtered to {len(self.unique_itc_values)} trees with stems ({time.perf_counter() - filter_start:.3f}s)")
                 self.log_to_console(f"✅ Filtered to {len(self.unique_itc_values)} trees with stem points")
-            elif has_stemcls and not perform_stemcls_filter:
-                print(f"[LOAD] {time.strftime('%H:%M:%S')} - Skipped stemcls filtering (user choice)")
+            elif has_stem_info and not perform_stem_filter:
                 self.log_to_console(f"⚡ Skipped stem filtering - showing all {len(self.unique_itc_values)} trees")
 
             # Populate tree list widget
@@ -2489,8 +2472,8 @@ class TreeVisualizerGUI(QMainWindow):
                 self.color_combo.addItem(field)
 
             self.visualize_button.setEnabled(True)
-            self.trunk_button.setEnabled(has_stemcls)
-            self.batch_analyze_button.setEnabled(has_stemcls)
+            self.trunk_button.setEnabled(has_stem_info)
+            self.batch_analyze_button.setEnabled(has_stem_info)
             self.crown_polygon_button.setEnabled(True)  # Always enabled since it doesn't require stemcls
             self.view_neighbors_button.setEnabled(True)
             self.draw_polygon_button.setEnabled(True)
@@ -3389,6 +3372,12 @@ class TreeVisualizerGUI(QMainWindow):
                         # Use a colormap with 9 distinct colors for ITC
                         self.plotter.add_points(point_cloud, scalars=color_values, point_size=2, render_points_as_spheres=False, 
                                               cmap='tab10', n_colors=9, clim=[0, 8], reset_camera=False, name='tree_point_cloud')
+                    elif color_field == 'semantic_pred':
+                        # Semantic classes: 0=Ground (gray), 1=Wood (warm brown), 2=Foliage (forest green)
+                        from matplotlib.colors import ListedColormap
+                        sem_cmap = ListedColormap(['#757575', '#D2691E', '#2E7D32'])
+                        self.plotter.add_points(point_cloud, scalars=color_values, point_size=2, render_points_as_spheres=False,
+                                              cmap=sem_cmap, n_colors=3, clim=[0, 2], reset_camera=False, name='tree_point_cloud')
                     else:
                         self.plotter.add_points(point_cloud, scalars=color_values, point_size=2, render_points_as_spheres=False, cmap='cividis', reset_camera=False, name='tree_point_cloud')
                         
@@ -3747,21 +3736,30 @@ class TreeVisualizerGUI(QMainWindow):
             QMessageBox.warning(self, "Warning", "Invalid tree IDs selected.")
             return
 
-        # Check if stemcls field exists
-        if 'stemcls' not in self.las_data.point_format.dimension_names:
-            print("Warning: No 'stemcls' scalar field found")
-            QMessageBox.warning(self, "Warning", "No 'stemcls' scalar field found in the LAS file.")
+        has_semantic = 'semantic_pred' in self.las_data.point_format.dimension_names
+        has_stemcls = 'stemcls' in self.las_data.point_format.dimension_names
+        if not has_stemcls and not has_semantic:
+            print("Warning: Neither 'semantic_pred' nor 'stemcls' scalar field found")
+            QMessageBox.warning(self, "Warning", "No 'semantic_pred' or 'stemcls' scalar field found in the LAS file.")
             return
 
         try:
             # Extract and merge trunk points for all selected trees
             all_points = []
             all_masks = []
-            itc_values = np.array(self.las_data['itc'])
-            stemcls_values = np.array(self.las_data['stemcls'])
+            itc_values = np.asarray(self.las_data['itc'])
+            if has_semantic:
+                sem_values = np.asarray(self.las_data['semantic_pred'])
+            if has_stemcls:
+                stemcls_values = np.asarray(self.las_data['stemcls'])
             
             for tree_id in selected_tree_ids:
-                mask = (itc_values == tree_id) & (stemcls_values != 1)
+                if has_semantic:
+                    # ForestFormer3D: 1 = Wood (Trunk/Branches)
+                    mask = (itc_values == tree_id) & (sem_values == 1)
+                else:
+                    # TreeAIBox stem classification: != 1 is wood
+                    mask = (itc_values == tree_id) & (stemcls_values != 1)
 
                 # Apply treefilter if enabled
                 if self.filter_checkbox.isChecked() and 'treefilter' in self.las_data.point_format.dimension_names:
@@ -5437,17 +5435,25 @@ class TreeVisualizerGUI(QMainWindow):
                     self.log_to_console(f"❌ Failed to load file {file_name}: {load_err}")
                     continue
 
-                if self.las_data is None or 'stemcls' not in self.las_data.point_format.dimension_names:
-                    self.log_to_console(f"⚠️ Skipping file {file_name}: no valid LAS data or 'stemcls' field missing.")
+                has_semantic = 'semantic_pred' in self.las_data.point_format.dimension_names
+                has_stemcls = 'stemcls' in self.las_data.point_format.dimension_names
+                if self.las_data is None or (not has_stemcls and not has_semantic):
+                    self.log_to_console(f"⚠️ Skipping file {file_name}: no valid LAS data or 'semantic_pred'/'stemcls' field missing.")
                     continue
 
                 all_forest_ids = sorted(self.unique_itc_values.tolist())
-                itc_values = np.array(self.las_data['itc'])
-                stemcls_values = np.array(self.las_data['stemcls'])
+                itc_values = np.asarray(self.las_data['itc'])
+                if has_semantic:
+                    sem_vals = np.asarray(self.las_data['semantic_pred'])
+                if has_stemcls:
+                    stemcls_values = np.asarray(self.las_data['stemcls'])
                 
                 valid_tree_ids = []
                 for tree_id in all_forest_ids:
-                    mask = (itc_values == tree_id) & (stemcls_values != 1)
+                    if has_semantic:
+                        mask = (itc_values == tree_id) & (sem_vals == 1)
+                    else:
+                        mask = (itc_values == tree_id) & (stemcls_values != 1)
                     if np.any(mask):
                         valid_tree_ids.append(tree_id)
 
@@ -5612,11 +5618,19 @@ class TreeVisualizerGUI(QMainWindow):
         self._restore_gdb_layers()
 
         try:
-            itc_values = np.array(self.las_data['itc'])
-            stemcls_values = np.array(self.las_data['stemcls'])
+            itc_values = np.asarray(self.las_data['itc'])
+            has_semantic = 'semantic_pred' in self.las_data.point_format.dimension_names
+            has_stemcls = 'stemcls' in self.las_data.point_format.dimension_names
             
-            # Get trunk points for this single tree
-            mask = (itc_values == tree_id) & (stemcls_values != 1)
+            # Get trunk points for this single tree (semantic_pred==1 or stemcls!=1)
+            if has_semantic:
+                sem_vals = np.asarray(self.las_data['semantic_pred'])
+                mask = (itc_values == tree_id) & (sem_vals == 1)
+            elif has_stemcls:
+                stemcls_values = np.asarray(self.las_data['stemcls'])
+                mask = (itc_values == tree_id) & (stemcls_values != 1)
+            else:
+                mask = (itc_values == tree_id)
 
             # Apply treefilter if enabled
             if self.filter_checkbox.isChecked() and 'treefilter' in self.las_data.point_format.dimension_names:
@@ -8290,19 +8304,29 @@ Important:
                 QMessageBox.warning(self, "No LAS Data", "LAS data not available for advanced analysis.")
                 return
 
-            # Get all stem points (stemcls != 1) for the selected trees
+            # Get all stem points (semantic_pred == 1 or stemcls != 1) for the selected trees
             selected_tree_ids = self.get_selected_tree_ids()
             if not selected_tree_ids:
                 QMessageBox.warning(self, "No Trees Selected", "Please select tree IDs first.")
                 return
 
-            itc_values = np.array(self.las_data['itc'])
-            stemcls_values = np.array(self.las_data['stemcls'])
+            itc_values = np.asarray(self.las_data['itc'])
+            has_semantic = 'semantic_pred' in self.las_data.point_format.dimension_names
+            has_stemcls = 'stemcls' in self.las_data.point_format.dimension_names
+            if has_semantic:
+                sem_vals = np.asarray(self.las_data['semantic_pred'])
+            if has_stemcls:
+                stemcls_values = np.asarray(self.las_data['stemcls'])
 
             # Get all stem points for selected trees
             all_stem_points = []
             for tree_id in selected_tree_ids:
-                mask = (itc_values == tree_id) & (stemcls_values != 1)
+                if has_semantic:
+                    mask = (itc_values == tree_id) & (sem_vals == 1)
+                elif has_stemcls:
+                    mask = (itc_values == tree_id) & (stemcls_values != 1)
+                else:
+                    mask = (itc_values == tree_id)
                 if self.filter_checkbox.isChecked() and 'treefilter' in self.las_data.point_format.dimension_names:
                     treefilter_values = np.array(self.las_data['treefilter'])
                     mask = mask & (treefilter_values == 2)
