@@ -214,9 +214,21 @@ def treeLoc(config_file, pcd, model_path, use_cuda=True,if_stem=False,cutoff_thr
         pred_img = merge_patches(pcd_min, min_res, nbmat_sz, pred_patches, sp_mins)
         pred_coord = peakfinder(pred_img, pcd_min, min_res)
 
-        tree = cKDTree(pcd[:,:2])
-        pred_idxs = tree.query_ball_point(pred_coord[:, :2], 0.2,p=2)
-        preds = np.array([pcd[pred_idx[np.argmin(pcd[pred_idx, 2])], :3] for pred_idx in pred_idxs])
+        tree = cKDTree(pcd[:, :2])
+        pred_idxs = tree.query_ball_point(pred_coord[:, :2], 0.2, p=2)
+        preds_list = []
+        for pred_idx in pred_idxs:
+            if len(pred_idx) == 0:
+                # no nearby points for this candidate, skip
+                continue
+            # find point with minimum z (lowest) among neighbors
+            local_z = pcd[pred_idx, 2]
+            local_min = np.argmin(local_z)
+            preds_list.append(pcd[pred_idx[local_min], :3])
+        if len(preds_list) > 0:
+            preds = np.array(preds_list)
+        else:
+            preds = np.empty((0, 3), dtype=float)
 
     else:
         preds=np.zeros([len(pcd),5],dtype=np.float32)
@@ -243,7 +255,9 @@ def treeLoc(config_file, pcd, model_path, use_cuda=True,if_stem=False,cutoff_thr
     return preds
 
 def postPeakExtraction(preds_tops,K=5,max_gap=0.3,min_rad=0.2,nms_thresh=0.3,progress_callback=lambda x: None):
-    point_count=len(preds_tops)
+    point_count = len(preds_tops)
+    if point_count == 0:
+        return np.empty((0, 3), dtype=float)
     kdtree = cKDTree(preds_tops[:, :3])
     nn_D, nn_idx = kdtree.query(preds_tops[:, :3], k=K)
     # Remove self-connections

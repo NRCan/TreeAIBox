@@ -27,8 +27,23 @@ def saveTreeToXML(tree_list,attribute_list,filename):
     root = ET.Element("tree")
     branches = {}
     branch_id_counter = 1
+    
+    # Filter out branches with insufficient nodes
+    valid_branches = []
     for branch, attrs in zip(tree_list, attribute_list):
+        if len(branch) < 1 or len(attrs) < 1:
+            print(f"[QSM Warning] Skipping invalid branch in XML export")
+            continue
+        valid_branches.append((branch, attrs))
         branches[branch[0]] = (branch, attrs)
+    
+    if not valid_branches:
+        print(f"[QSM Warning] No valid branches to save to XML")
+        # Create empty tree XML
+        xml_str = minidom.parseString(ET.tostring(root)).toprettyxml(indent="  ")
+        with open(filename, "w", encoding="utf-8") as file:
+            file.write(xml_str)
+        return
 
     def create_branch(parent_node, nodes, attrs, level, prev_node_in_parent):
         nonlocal branch_id_counter
@@ -65,7 +80,9 @@ def saveTreeToXML(tree_list,attribute_list,filename):
             "radius": f"{attr[3]:.6f}"
         })
 
-    create_branch(-1, tree_list[0], attribute_list[0], 1, -1)
+    if valid_branches:
+        create_branch(-1, valid_branches[0][0], valid_branches[0][1], 1, -1)
+    
     xml_str = minidom.parseString(ET.tostring(root)).toprettyxml(indent="  ")
     with open(filename, "w", encoding="utf-8") as file:
         file.write(xml_str)
@@ -86,6 +103,11 @@ def saveTreeToObj(tree_centroid_radius,fname, interval_distance=0.05, num_sides=
     all_faces = []
     vertex_offset = 0
     for curve_nodes in tree_centroid_radius:
+        # Skip branches with insufficient nodes (need at least 2 for tube creation)
+        if len(curve_nodes) < 2:
+            print(f"[QSM Warning] Skipping branch with only {len(curve_nodes)} node(s)")
+            continue
+            
         if len(curve_nodes) <= 3:
             vertices, faces = createLineTube(curve_nodes, interval_distance, num_sides)
         else:
@@ -479,17 +501,41 @@ def calculateRadius(pts,tree,segs_centroids,min_r=0.04):# this needs to be impro
         segs_centroid_dir=segs_centroid_vec/np.linalg.norm(segs_centroid_vec, axis=-1)[:, np.newaxis]
         for i,node in enumerate(path[1:]):
             if len(segs_centroids_group[node]) > 4:
-                #project to the horizontal plane and circle fitting
-                segs_vec = pts[segs_centroids_group[node],:3]-segs_centroids[node,:3]
-                segs_prj = np.dot(segs_vec, segs_centroid_dir[i,:3])
-                segs_prj_2d=pts[segs_centroids_group[node],:2] - np.outer(segs_prj, segs_centroid_dir[i,:3])[:, :2]
-                r0=np.median(np.sqrt(np.sum(np.power(segs_prj_2d-np.mean(segs_prj_2d,0),2),axis=1)))
-                xc, yc, r, sigma = riemannSWFLa(segs_prj_2d)
-                if sigma/r>0.3:#only fit circles when the branches or stems are large enough
-                    path_centroid_radius.append(np.array([segs_centroids[node,0],segs_centroids[node,1],segs_centroids[node,2],r0]))
-                else:
-                    # path_centroid_radius.append(np.array([xc,yc,segs_centroids[node,2],np.minimum(r,r0*1.2)]))
-                    path_centroid_radius.append(np.array([segs_centroids[node,0],segs_centroids[node,1],segs_centroids[node,2],np.minimum(r,r0*1.2)]))
+                try:
+                    #project to the horizontal plane and circle fitting
+                    segs_vec = pts[segs_centroids_group[node],:3]-segs_centroids[node,:3]
+                    segs_prj = np.dot(segs_vec, segs_centroid_dir[i,:3])
+                    segs_prj_2d=pts[segs_centroids_group[node],:2] - np.outer(segs_prj, segs_centroid_dir[i,:3])[:, :2]
+                    
+                    # Check for NaN or inf values before circle fitting
+                    if not np.all(np.isfinite(segs_prj_2d)):
+                        # Fallback to min_r if projected data is invalid
+                        path_centroid_radius.append(np.array([segs_centroids[node,0],segs_centroids[node,1],segs_centroids[node,2],min_r]))
+                        continue
+                    
+                    r0=np.median(np.sqrt(np.sum(np.power(segs_prj_2d-np.mean(segs_prj_2d,0),2),axis=1)))
+                    
+                    # Validate r0 before circle fitting
+                    if not np.isfinite(r0) or r0 < 1e-6:
+                        # Points are too close together, use min_r
+                        path_centroid_radius.append(np.array([segs_centroids[node,0],segs_centroids[node,1],segs_centroids[node,2],min_r]))
+                        continue
+                    
+                    xc, yc, r, sigma = riemannSWFLa(segs_prj_2d)
+                    
+                    # Check if circle fitting produced valid results
+                    if not np.isfinite(r) or not np.isfinite(sigma) or r < 1e-6:
+                        # Circle fitting failed, use r0 as fallback
+                        path_centroid_radius.append(np.array([segs_centroids[node,0],segs_centroids[node,1],segs_centroids[node,2],r0]))
+                    elif sigma/r>0.3:#only fit circles when the branches or stems are large enough
+                        path_centroid_radius.append(np.array([segs_centroids[node,0],segs_centroids[node,1],segs_centroids[node,2],r0]))
+                    else:
+                        # path_centroid_radius.append(np.array([xc,yc,segs_centroids[node,2],np.minimum(r,r0*1.2)]))
+                        path_centroid_radius.append(np.array([segs_centroids[node,0],segs_centroids[node,1],segs_centroids[node,2],np.minimum(r,r0*1.2)]))
+                except Exception as e:
+                    # Any error in circle fitting, use min_r as safe fallback
+                    print(f"[QSM Warning] Circle fitting failed for node {node}: {e}, using min_r={min_r}")
+                    path_centroid_radius.append(np.array([segs_centroids[node,0],segs_centroids[node,1],segs_centroids[node,2],min_r]))
             else:
                 path_centroid_radius.append(np.array([segs_centroids[node,0],segs_centroids[node,1],segs_centroids[node,2],min_r]))
 
@@ -500,7 +546,16 @@ def calculateRadius(pts,tree,segs_centroids,min_r=0.04):# this needs to be impro
             for i, filtered_radius in enumerate(filtered_radii):
                 path_centroid_radius[i][3] = filtered_radius
 
-        path_centroid_radius.insert(0,np.array([segs_centroids[path[0],0],segs_centroids[path[0],1],segs_centroids[path[0],2],path_centroid_radius[0][-1]]))
+        # Add the first node with appropriate radius
+        if len(path_centroid_radius) > 0:
+            # Use the radius from the first calculated node
+            first_node_radius = path_centroid_radius[0][-1]
+        else:
+            # Path has only 1 node or all nodes failed to calculate radius, use min_r
+            print(f"[QSM Warning] Path with {len(path)} nodes has no calculated radii, using min_r={min_r}")
+            first_node_radius = min_r
+        
+        path_centroid_radius.insert(0,np.array([segs_centroids[path[0],0],segs_centroids[path[0],1],segs_centroids[path[0],2],first_node_radius]))
         tree_centroid_radius.append(path_centroid_radius)
     return tree_centroid_radius
 

@@ -1,0 +1,17 @@
+2026-05-20 07:22:45,811 - ERROR - Uncaught exception:
+Traceback (most recent call last):
+  File "e:\AGRG\TreeAIBox\scripts\treeAIbox_Enhancer.py", line 8994, in <module>
+    main()
+  File "e:\AGRG\TreeAIBox\scripts\treeAIbox_Enhancer.py", line 8983, in main
+    window = TreeVisualizerGUI()
+             ^^^^^^^^^^^^^^^^^^^
+  File "e:\AGRG\TreeAIBox\scripts\treeAIbox_Enhancer.py", line 456, in __init__
+    self.init_ui()
+  File "e:\AGRG\TreeAIBox\scripts\treeAIbox_Enhancer.py", line 631, in init_ui
+    sidebar = self.create_sidebar()
+              ^^^^^^^^^^^^^^^^^^^^^
+  File "e:\AGRG\TreeAIBox\scripts\treeAIbox_Enhancer.py", line 811, in create_sidebar
+    self.volume_folder_checkbox.stateChanged.connect(self.on_volume_folder_checkbox_changed)
+                                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'TreeVisualizerGUI' object has no attribute 'on_volume_folder_checkbox_changed'
+

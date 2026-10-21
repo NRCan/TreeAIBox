@@ -1,0 +1,73 @@
+HALL OF BLAME
+=============
+
+The US Department of the Interior has distributed memos at affiliated
+agencies (such as the USGS) that instruct their staff to uninstall
+LAStools claiming my  software would present a serious security risk:
+
+http://linkedin.com/feed/update/urn:li:activity:6687103412284248064/
+http://twitter.com/LAStools/status/1280599834882445312
+
+This is a lie. This is a false allegation. When questioned by several of
+my customers, the federal agencies were unable to produce anything to back
+up their malicious claim. No suprise. There is no security risk. Why would
+there be? Why would we risk over ten years of - not only - the hard work of
+creating the LAStools software but also the hard earned trust of the LiDAR
+and point cloud community?
+
+It seems a mid-level manager at BLM created this mess with an alarmist call.
+This note will remain here until we received apology and retraction of the
+defamation, slander and libel of our software, company and CEO.
+
+=============
+BAD USGS MEMO
+=============
+
+From: Kwong, Jerry <jkwong@usgs.gov> on behalf of Notifications Do Not Reply,
+      GS System <GS_System_Notifications_Do_Not_Reply@usgs.gov>
+Sent: Monday, July 13, 2020 12:24 PM
+To: Notifications Do Not Reply, GS System <GS_System_Notifications_Do_Not_Reply@usgs.gov>
+Subject: [HIGH PRIORITY] LASTool Suite Presents Potential Risk to USGS Projects and Programs
+To: IT All
+Date: July 13, 2020
+Subject: [HIGH PRIORITY] LASTool Suite Presents Risk to USGS Projects and Programs
+
+WHAT YOU NEED TO KNOW
+
+The USGS Computer Security Incident Response Team was informed by DOI staff
+of a potential security issue with LASTools, a widely used software suite
+in GIS/LIDAR communities developed by a company called Rapidlasso in Germany.
+In recent days, several DOI bureaus have decided to remove this software from
+their environment. At this time, USGS is not requiring removal as these tools
+are used to perform critical business functions which cannot be readily replaced
+with another product. However, since this situation has gained attention from
+law enforcement entities, it is feared that a directive could be issued to remove
+the software at some point in the future.
+
+WHAT YOU NEED TO DO
+
+Long term dependence on LASTools presents a serious risk to any USGS project or
+program that relies on it. If any component of this tool suite is installed and
+not needed on computers, please remove it as soon as possible. If actively used,
+project managers should evaluate needs and plan a path forward which will mitigate
+the risk(s) presented by this tool suite.
+
+Please redistribute this notice to employees within your area of influence.
+
+Thank you,
+
+ITSOT - CSIRT
+OFFICE OF ENTERPRISE INFORMATION
+GS Service Desk
+If you have any questions about this email, please contact the USGS Service Desk.
+Chat: https://itsupport.usgs.gov
+Web: https://support.usgs.gov
+email: servicedesk@usgs.gov
+Phone: 703-648-4357
+Website: https://servicedesk.usgs.gov
+
+=============
+=============
+
+The "HALL OF BLAME" is our way to stand up against false allegations about our
+software LAStools, our company rapidlasso GmbH or our CEO Dr. Martin Isenburg.

@@ -100,10 +100,18 @@ def sliding_blocks_point_indices(pts, block_size, overlap_ratio):
 
 def filterPoints(config_file, pcd, model_path, if_bottom_only=True,use_efficient=True,use_cuda=True, progress_callback=lambda x: None):
     progress_callback(10)
+    print(f"[filterPoints] Starting component filtering")
+    print(f"[filterPoints] Config file: {config_file}")
+    print(f"[filterPoints] Model path: {model_path}")
+    print(f"[filterPoints] Input point cloud shape: {pcd.shape}")
+    print(f"[filterPoints] Using GPU: {use_cuda}")
+    
     # laod variables from the config file (e.g. woodcls_branch_tls_segformer3D_112_4cm(GPU8GB).json
     try:
+        print(f"[filterPoints] Loading config file...")
         with open(config_file) as json_file:
             configs = json.load(json_file)
+        print(f"[filterPoints] Config file loaded successfully")
     except Exception as e:
         print(config_file)
         print("Cannot load config file:", e)
@@ -112,7 +120,10 @@ def filterPoints(config_file, pcd, model_path, if_bottom_only=True,use_efficient
     nbmat_sz = np.array(configs["model"]["voxel_number_in_block"])
     min_res = np.array(configs["model"]["voxel_resolution_in_meter"])
     num_classes = configs["model"]["num_classes"]+1
+    print(f"[filterPoints] Block size: {nbmat_sz}, Resolution: {min_res}, Classes: {num_classes}")
+    
     #define and load the 3D segformer model
+    print(f"[filterPoints] Importing model architecture (efficient={use_efficient})...")
     if use_efficient:
         try:
             from vox3DESegFormer import Segformer#efficient segformer
@@ -124,6 +135,7 @@ def filterPoints(config_file, pcd, model_path, if_bottom_only=True,use_efficient
         except ImportError:
             from .vox3DSegFormer import Segformer
     
+    print(f"[filterPoints] Creating model instance...")
     model = Segformer(
         block3d_size=nbmat_sz,
         in_chans=1,
@@ -139,14 +151,31 @@ def filterPoints(config_file, pcd, model_path, if_bottom_only=True,use_efficient
         drop_rate=0.0,
         drop_path_rate=0.0,
     )
+    print(f"[filterPoints] Model instance created")
 
     device = "cuda" if use_cuda else "cpu"
+    print(f"[filterPoints] Using device: {device}")
     
     if use_cuda:
+        print(f"[filterPoints] GPU Information:")
+        print(f"[filterPoints]   Device count: {torch.cuda.device_count()}")
+        print(f"[filterPoints]   Current device: {torch.cuda.current_device()}")
+        print(f"[filterPoints]   Device name: {torch.cuda.get_device_name(0)}")
+        print(f"[filterPoints]   CUDA available: {torch.cuda.is_available()}")
+        print(f"[filterPoints]   Memory allocated: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+        print(f"[filterPoints]   Memory reserved: {torch.cuda.memory_reserved() / 1e9:.2f} GB")
+        
+        print(f"[filterPoints] Moving model to GPU...")
         model = model.cuda()
+        print(f"[filterPoints]   Memory after model.cuda(): {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+        
+        print(f"[filterPoints] Loading state dict from {model_path}...")
         state_dict = torch.load(model_path)
+        print(f"[filterPoints] State dict loaded")
     else:
+        print(f"[filterPoints] Loading state dict to CPU from {model_path}...")
         state_dict = torch.load(model_path,map_location=torch.device('cpu'))
+        print(f"[filterPoints] State dict loaded to CPU")
 
     model.max_accu = state_dict.get('max_accu', 0.0)
     if 'max_accu' in state_dict:
@@ -156,25 +185,35 @@ def filterPoints(config_file, pcd, model_path, if_bottom_only=True,use_efficient
     if 'best_mIoU' in state_dict:
         state_dict.pop('best_mIoU')
 
+    print(f"[filterPoints] Loading state dict into model...")
     model.load_state_dict(state_dict)
-
+    print(f"[filterPoints] Setting model to eval mode...")
     model.eval()
+    print(f"[filterPoints] Model loaded and ready")
 
     nb_tsz = int(np.prod(nbmat_sz))
+    print(f"[filterPoints] Block tensor size: {nb_tsz}")
 
     #voxelize
     if if_bottom_only:
         cut_dim=2
     else:
         cut_dim=3
-
+    
+    print(f"[filterPoints] Starting voxelization (cut_dim={cut_dim})...")
+    print(f"[filterPoints] Point cloud shape: {pcd.shape}, cut_dim: {cut_dim}")
     _, block_idx_groups = sliding_blocks_point_indices(pcd[:, :cut_dim], min_res[:cut_dim] * nbmat_sz[:cut_dim], overlap_ratio=0.1)
+    print(f"[filterPoints] Voxelization complete. Number of blocks: {len(block_idx_groups)}")
 
     nb_idxs = []
     nb_pcd_idxs = []
     nb_inverse_idxs = []
 
-    for idx in block_idx_groups:
+    print(f"[filterPoints] Processing {len(block_idx_groups)} blocks to extract voxel indices...")
+    for idx_block, idx in enumerate(block_idx_groups):
+        if idx_block % max(1, len(block_idx_groups) // 10) == 0:
+            print(f"[filterPoints]   Processed {idx_block}/{len(block_idx_groups)} blocks")
+        
         columns_sp = pcd[idx, :]
         nb_pcd_idx = idx
 
@@ -190,15 +229,25 @@ def filterPoints(config_file, pcd, model_path, if_bottom_only=True,use_efficient
         nb_idxs.append(nb_idx_u)#indicies of unique voxels from each block
         nb_inverse_idxs.append(nb_inverse_idx)#indices used to reproject the unique voxels to original order
         nb_pcd_idxs.append(nb_pcd_idx)#within-voxel point indices from the point cloud
+    
+    print(f"[filterPoints] Voxel index extraction complete")
 
     progress_callback(15)
 
     #apply the DL model blockwisely
     if num_classes>3:
+        print(f"[filterPoints] Starting multi-class inference ({num_classes} classes)")
         pcd_pred = np.full(len(pcd), dtype=int, fill_value=num_classes-1)
         
         total_nbs = len(nb_idxs)
+        print(f"[filterPoints] Processing {total_nbs} blocks with DL model...")
         for i in range(total_nbs):
+            if i % max(1, total_nbs // 20) == 0:
+                if use_cuda:
+                    print(f"[filterPoints]   Block {i+1}/{total_nbs} ({100*i/total_nbs:.1f}%) - GPU Mem: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+                else:
+                    print(f"[filterPoints]   Block {i+1}/{total_nbs} ({100*i/total_nbs:.1f}%)")
+            
             nb_idx = nb_idxs[i]
 
             x = torch.zeros(nb_tsz, 1)
@@ -207,7 +256,14 @@ def filterPoints(config_file, pcd, model_path, if_bottom_only=True,use_efficient
 
             x = torch.swapaxes(torch.moveaxis(x.reshape((1, *nbmat_sz, 1)).float(), -1, 1), -1, 2)
             with torch.no_grad():
-                h = model(x.to(device))
+                try:
+                    h = model(x.to(device))
+                except RuntimeError as e:
+                    print(f"[filterPoints] ERROR: GPU/model inference failed at block {i}: {e}")
+                    print(f"[filterPoints] Input tensor shape: {x.shape}")
+                    if use_cuda:
+                        print(f"[filterPoints] GPU Mem when error: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+                    raise
 
             h_nonzero = torch.moveaxis(torch.unsqueeze(torch.moveaxis(torch.swapaxes(h, -1, 2), 1, -1).reshape((nb_tsz, num_classes))[nb_idx, :],0), -1, 1)
             h_nonzero = torch.argmax(h_nonzero[0], dim=0)
@@ -217,16 +273,25 @@ def filterPoints(config_file, pcd, model_path, if_bottom_only=True,use_efficient
 
             progress_value = int(85 * i / total_nbs) + 15
             progress_callback(progress_value)
-    
+        
+        print(f"[filterPoints] Multi-class inference complete")
         progress_callback(100)
         return pcd_pred.astype(np.int32)#int(1,2)
     
     else:#binary case
+        print(f"[filterPoints] Starting binary classification inference")
         pcd_pred = np.full(len(pcd), dtype=bool, fill_value=False)
             
 
         total_nbs = len(nb_idxs)
+        print(f"[filterPoints] Processing {total_nbs} blocks with DL model...")
         for i in range(total_nbs):
+            if i % max(1, total_nbs // 20) == 0:
+                if use_cuda:
+                    print(f"[filterPoints]   Block {i+1}/{total_nbs} ({100*i/total_nbs:.1f}%) - GPU Mem: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+                else:
+                    print(f"[filterPoints]   Block {i+1}/{total_nbs} ({100*i/total_nbs:.1f}%)")
+            
             nb_idx = nb_idxs[i]
 
             x = torch.zeros(nb_tsz, 1)
@@ -235,7 +300,14 @@ def filterPoints(config_file, pcd, model_path, if_bottom_only=True,use_efficient
 
             x = torch.swapaxes(torch.moveaxis(x.reshape((1, *nbmat_sz, 1)).float(), -1, 1), -1, 2)
             with torch.no_grad():
-                h = model(x.to(device))
+                try:
+                    h = model(x.to(device))
+                except RuntimeError as e:
+                    print(f"[filterPoints] ERROR: GPU/model inference failed at block {i}: {e}")
+                    print(f"[filterPoints] Input tensor shape: {x.shape}")
+                    if use_cuda:
+                        print(f"[filterPoints] GPU Mem when error: {torch.cuda.memory_allocated() / 1e9:.2f} GB")
+                    raise
 
             h_nonzero = torch.moveaxis(torch.unsqueeze(torch.moveaxis(torch.swapaxes(h, -1, 2), 1, -1).reshape((nb_tsz, num_classes))[nb_idx, :],0), -1, 1)
             h_nonzero = torch.argmax(h_nonzero[0], dim=0)
@@ -246,13 +318,15 @@ def filterPoints(config_file, pcd, model_path, if_bottom_only=True,use_efficient
             progress_value = int(85 * i / total_nbs) + 15
             progress_callback(progress_value)
 
-
+        print(f"[filterPoints] Binary classification inference complete")
         # pcd_pred[pcd_pred > 2.0] = 2.0
         if if_bottom_only:
+            print(f"[filterPoints] Applying bottom-only filter...")
             seen = np.zeros_like(pcd_pred, dtype=bool)
             seen[np.concatenate(nb_pcd_idxs)] = True  # mark every index that was ever visited
             pcd_pred[~seen] = True
         
+        print(f"[filterPoints] Processing complete")
         progress_callback(100)
         return pcd_pred.astype(np.int32)+1#bool(False,True) to int(1,2)
 
